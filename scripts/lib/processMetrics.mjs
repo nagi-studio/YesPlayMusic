@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 
-const evidenceSchemaVersions = new Set([2, 3]);
+const evidenceSchemaVersions = new Set([2, 3, 4]);
 const processRoles = new Set([
   'host',
   'sidecar',
@@ -383,11 +383,40 @@ export function verifyPerformanceEvidence(evidence) {
     measurement.rootPid
   );
   const usesProcessBirthTokens = evidence.schemaVersion >= 3;
+  const usesPortableFileIdentity = evidence.schemaVersion >= 4;
   const rootProcessStartedAt = usesProcessBirthTokens
     ? parseCanonicalTimestamp(measurement.rootProcessStartedAt)
     : null;
   if (
-    measurement.rootExecutableRealpath !== evidence.executable.realpath ||
+    usesPortableFileIdentity &&
+    (Object.hasOwn(evidence.artifact ?? {}, 'realpath') ||
+      Object.hasOwn(evidence.executable ?? {}, 'realpath') ||
+      Object.hasOwn(measurement, 'rootExecutableRealpath'))
+  ) {
+    throw new Error('schema v4 性能证据不能包含本机路径');
+  }
+  if (
+    usesPortableFileIdentity &&
+    (!evidence.artifact ||
+      !evidence.executable ||
+      Object.keys(evidence.artifact).some(
+        key => key !== 'bytes' && key !== 'sha256'
+      ) ||
+      Object.keys(evidence.executable).some(
+        key => key !== 'bytes' && key !== 'sha256'
+      ) ||
+      !Number.isSafeInteger(evidence.artifact.bytes) ||
+      evidence.artifact.bytes <= 0 ||
+      !Number.isSafeInteger(evidence.executable.bytes) ||
+      evidence.executable.bytes <= 0 ||
+      !/^[a-f0-9]{64}$/.test(evidence.artifact.sha256) ||
+      !/^[a-f0-9]{64}$/.test(evidence.executable.sha256))
+  ) {
+    throw new Error('schema v4 性能证据文件身份无效');
+  }
+  if (
+    (!usesPortableFileIdentity &&
+      measurement.rootExecutableRealpath !== evidence.executable.realpath) ||
     measurement.rootExecutableSha256 !== evidence.executable.sha256
   ) {
     throw new Error('性能证据根进程与 installed executable 未绑定');

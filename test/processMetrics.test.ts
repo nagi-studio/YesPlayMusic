@@ -541,6 +541,51 @@ describe('进程树性能采样', () => {
       );
       expect(measured.exitCode).toBe(0);
 
+      const generatedEvidence = await Bun.file(evidencePath).json();
+      expect(generatedEvidence.schemaVersion).toBe(4);
+      expect(generatedEvidence.measurement.samplerVersion).toBe(4);
+      expect(Object.keys(generatedEvidence.artifact).sort()).toEqual([
+        'bytes',
+        'sha256',
+      ]);
+      expect(Object.keys(generatedEvidence.executable).sort()).toEqual([
+        'bytes',
+        'sha256',
+      ]);
+      expect(generatedEvidence.measurement).not.toHaveProperty(
+        'rootExecutableRealpath'
+      );
+      expect(JSON.stringify(generatedEvidence)).not.toContain(directory);
+      expect(JSON.stringify(generatedEvidence)).not.toContain('realpath');
+      expect(
+        verifyPerformanceEvidence({
+          ...generatedEvidence,
+          measurement: {
+            ...generatedEvidence.measurement,
+            samplerVersion: 3,
+          },
+        })
+      ).toEqual(generatedEvidence.summary);
+      expect(() =>
+        verifyPerformanceEvidence({
+          ...generatedEvidence,
+          executable: {
+            ...generatedEvidence.executable,
+            realpath: executablePath,
+          },
+        })
+      ).toThrow('schema v4 性能证据不能包含本机路径');
+
+      const missingOverrides = Bun.spawnSync([
+        process.execPath,
+        'scripts/verify-performance-evidence.mjs',
+        evidencePath,
+      ]);
+      expect(missingOverrides.exitCode).toBe(1);
+      expect(new TextDecoder().decode(missingOverrides.stderr)).toContain(
+        'schema v4 必须通过 --artifact 与 --executable'
+      );
+
       const verified = Bun.spawnSync([
         process.execPath,
         'scripts/verify-performance-evidence.mjs',

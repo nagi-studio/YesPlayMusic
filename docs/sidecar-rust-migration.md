@@ -435,7 +435,7 @@ GPU/Networking/WebContent PID 为 `78517/78518/78519`。每份证据都有独立
 Sidecar RSS mean 从 12.92 MiB 增至 13.28 MiB，`phys_footprint` 从 8.938004 MiB 降至
 8.609901 MiB。10 分钟内没有 Sidecar 物理内存持续累积的证据，这组数据不能证明长期运行不存在泄漏。
 
-四份性能证据均为 schemaVersion 3，各含 300 个 `rawSamples` 和逐进程摘要：
+四份性能证据均为 schemaVersion 4，各含 300 个 `rawSamples` 和逐进程摘要：
 [`installed-idle-5m.json`](./evidence/sidecar-rust-migration/installed-idle-5m.json)、
 [`installed-playback-0-5m.json`](./evidence/sidecar-rust-migration/installed-playback-0-5m.json)、
 [`installed-playback-5-10m.json`](./evidence/sidecar-rust-migration/installed-playback-5-10m.json) 和

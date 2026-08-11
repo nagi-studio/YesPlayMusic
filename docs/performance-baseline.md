@@ -167,11 +167,11 @@ WebKit。Sidecar RSS mean 从 12.92 MiB 增至 13.28 MiB，`phys_footprint` 从 
 - [窗口隐藏 0-5 min](./evidence/sidecar-rust-migration/installed-hidden-idle-5m.json)
 - [人工 UI、`phys_footprint` 与退出回收记录](./evidence/sidecar-rust-migration/installed-footprints.json)
 
-四份性能证据均为 schemaVersion 3，包含 300 个 `rawSamples`、`processSummaries`、
+四份性能证据均为 schemaVersion 4，包含 300 个 `rawSamples`、`processSummaries`、
 artifact/executable SHA-256、`measurement.rootProcessStartedAt`、逐进程
 `startedAt`/`execTokenHash` 和 1 秒间隔检查。四份均已由 `verify-performance-evidence.mjs`
-独立重算通过。JSON 保留采样机的绝对路径；换机器或清理临时安装目录后，必须把同 SHA
-DMG 复制出的 host 路径显式传给 verifier：
+独立重算通过。JSON 不保存采样机路径；复核时必须把同 SHA DMG 及其复制出的 host
+实际路径显式传给 verifier：
 
 ```bash
 bun scripts/verify-performance-evidence.mjs \

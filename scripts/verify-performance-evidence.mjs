@@ -47,6 +47,14 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = await Bun.file(options.evidencePath).json();
   const summary = verifyPerformanceEvidence(evidence);
+  if (
+    evidence.schemaVersion >= 4 &&
+    (!options.artifactPath || !options.executablePath)
+  ) {
+    throw new Error(
+      'schema v4 必须通过 --artifact 与 --executable 提供待复核文件'
+    );
+  }
   await verifyFileIdentity('artifact', evidence.artifact, options.artifactPath);
   await verifyFileIdentity(
     'executable',

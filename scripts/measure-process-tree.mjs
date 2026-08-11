@@ -54,6 +54,13 @@ async function fileIdentity(filePath) {
   };
 }
 
+function portableFileIdentity(identity) {
+  return {
+    bytes: identity.bytes,
+    sha256: identity.sha256,
+  };
+}
+
 function osVersion() {
   const result = Bun.spawnSync(
     process.platform === 'darwin'
@@ -162,9 +169,9 @@ async function main() {
 
   if (options.evidencePath) {
     const evidence = {
-      schemaVersion: 3,
-      artifact: await fileIdentity(options.artifactPath),
-      executable,
+      schemaVersion: 4,
+      artifact: portableFileIdentity(await fileIdentity(options.artifactPath)),
+      executable: portableFileIdentity(executable),
       measurement: {
         label: options.label,
         rootPid: options.pid,
@@ -178,8 +185,7 @@ async function main() {
         arch: process.arch,
         osVersion: osVersion(),
         bunVersion: Bun.version,
-        samplerVersion: 3,
-        rootExecutableRealpath,
+        samplerVersion: 4,
         rootExecutableSha256: executable.sha256,
         rootProcessStartedAt,
       },
