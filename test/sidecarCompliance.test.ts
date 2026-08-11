@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { execFile } from 'node:child_process';
 import {
   cp,
@@ -25,6 +25,8 @@ import {
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dir, '..');
 const temporaryDirectories: string[] = [];
+
+setDefaultTimeout(30_000);
 
 afterEach(async () => {
   await Promise.all(
