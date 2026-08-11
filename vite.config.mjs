@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
 import path from 'node:path';
+import { rendererDependencyManifestPlugin } from './scripts/build-app-compliance.mjs';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -28,6 +29,7 @@ export default defineConfig(({ mode }) => {
         iconDirs: [path.resolve(import.meta.dirname, 'src/assets/icons')],
         symbolId: 'icon-[name]',
       }),
+      ...(isTauri ? [rendererDependencyManifestPlugin()] : []),
     ],
     define: isTauri
       ? {

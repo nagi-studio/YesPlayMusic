@@ -5,6 +5,7 @@ import type { AxiosError, AxiosRequestConfig } from 'axios';
 import { isDesktopRuntime } from '@/utils/runtime';
 import defaultStorageState from '@/stores/defaults';
 import { decodeSettingsState, readStoredJson } from '@/utils/persistedState';
+import { handleNcmSessionExpiry } from '@/utils/sessionExpiry';
 import type { Decoder } from '@/api/decoders';
 
 const baseURL = import.meta.env['VUE_APP_NETEASE_API_URL'] ?? '';
@@ -69,22 +70,15 @@ service.interceptors.response.use(
     }
 
     if (
-      typeof data === 'object' &&
-      data !== null &&
-      'code' in data &&
-      data.code === 301 &&
-      'msg' in data &&
-      data.msg === '需要登录'
+      handleNcmSessionExpiry(data, {
+        loginRoute: isDesktopRuntime ? 'loginAccount' : 'login',
+        logout: doLogout,
+        navigate: name => {
+          void router.push({ name });
+        },
+      })
     ) {
       console.warn('Token has expired. Logout now!');
-
-      doLogout();
-
-      if (isDesktopRuntime) {
-        router.push({ name: 'loginAccount' });
-      } else {
-        router.push({ name: 'login' });
-      }
     }
     return Promise.reject(error);
   }

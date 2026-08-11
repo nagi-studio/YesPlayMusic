@@ -335,8 +335,8 @@ fn retain_missing_cookies(cookies: &mut Vec<StoredCookie>, current: &[Cookie<'_>
         .collect::<HashSet<_>>();
     let auth_cookie_available = existing.iter().any(|(name, _)| name == "MUSIC_U");
     cookies.retain(|cookie| {
-        !(auth_cookie_available && cookie.name == "MUSIC_U")
-            && !existing.contains(&(cookie.name.clone(), cookie.path.clone()))
+        !(existing.contains(&(cookie.name.clone(), cookie.path.clone()))
+            || auth_cookie_available && cookie.name == "MUSIC_U")
     });
     auth_cookie_available
 }

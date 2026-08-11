@@ -4,6 +4,11 @@ export interface UpdaterManifestOptions {
   repository?: string;
   tag?: string;
   publishedAt?: string;
+  publicKey?: string;
+  artifactVersionReader?: (
+    target: string,
+    artifactPath: string
+  ) => Promise<string>;
 }
 
 export interface UpdaterManifest {

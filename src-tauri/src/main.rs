@@ -20,7 +20,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Mutex,
+        Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -59,6 +59,11 @@ use tauri_plugin_shell::{
 
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSWindow, NSWindowButton, NSWindowCollectionBehavior};
+#[cfg(target_os = "macos")]
+use std::{
+    os::{fd::AsRawFd, unix::net::UnixStream},
+    path::Path,
+};
 
 const API_PORT: u16 = 12_754;
 const DEV_WEB_PORT: u16 = 1_420;
@@ -69,6 +74,97 @@ const SIDECAR_HEALTH_BODY: &str = r#"{"service":"yesplaymusic-sidecar","protocol
 const SIDECAR_HEALTH_TOKEN_HEADER: &str = "X-YesPlayMusic-Health-Token";
 const WINDOW_MOVE_SETTLE_TIME: Duration = Duration::from_millis(250);
 const STARTUP_SHOW_TIMEOUT: Duration = Duration::from_secs(5);
+const SIDECAR_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(7);
+const SIDECAR_FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const SIDECAR_SHUTDOWN_SIGNAL: &[u8] = &[0];
+#[cfg(target_os = "macos")]
+const SINGLE_INSTANCE_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(target_os = "macos")]
+struct MacosStartupGate {
+    file: fs::File,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosStartupGate {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor remains owned by self.file for the duration of this call.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn single_instance_identifier(identifier: &str) -> String {
+    identifier.replace(['.', '-'], "_")
+}
+
+#[cfg(target_os = "macos")]
+fn single_instance_socket_path(identifier: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "/tmp/{}_si.sock",
+        single_instance_identifier(identifier)
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn startup_gate_path(identifier: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "{}_startup.lock",
+        single_instance_identifier(identifier)
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn acquire_macos_startup_gate(path: &Path, timeout: Duration) -> Result<MacosStartupGate, String> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("无法打开 single-instance 启动锁：{error}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: flock only borrows this valid descriptor and does not outlive file.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(MacosStartupGate { file });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(format!("无法取得 single-instance 启动锁：{error}"));
+        }
+        if Instant::now() >= deadline {
+            return Err("等待现有 YesPlayMusic 实例完成冷启动超时".into());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_single_instance_listener(path: &Path, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match UnixStream::connect(path) {
+            Ok(stream) => {
+                drop(stream);
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(error) => return Err(format!("single-instance listener 检查失败：{error}")),
+        }
+        if Instant::now() >= deadline {
+            return Err("single-instance listener 未在启动锁释放前就绪".into());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
 
 fn updater_public_key() -> Option<&'static str> {
     option_env!("TAURI_UPDATER_PUBKEY").filter(|key| !key.trim().is_empty())
@@ -100,7 +196,10 @@ fn updater_target() -> &'static str {
 
 #[cfg(test)]
 mod updater_target_tests {
-    use super::updater_target_for;
+    use super::{
+        single_instance_notification_is_probe, updater_requires_explicit_sidecar_shutdown,
+        updater_target_for,
+    };
     use tauri::utils::config::BundleType;
 
     #[test]
@@ -115,11 +214,84 @@ mod updater_target_tests {
         );
         assert_eq!(updater_target_for("linux", "x86_64", None), "unsupported");
     }
+
+    #[test]
+    fn windows_installer_requires_confirmed_sidecar_shutdown() {
+        assert!(updater_requires_explicit_sidecar_shutdown("windows"));
+        assert!(!updater_requires_explicit_sidecar_shutdown("macos"));
+        assert!(!updater_requires_explicit_sidecar_shutdown("linux"));
+    }
+
+    #[test]
+    fn only_an_empty_internal_single_instance_connection_is_a_readiness_probe() {
+        assert!(single_instance_notification_is_probe(&[String::new()], ""));
+        assert!(!single_instance_notification_is_probe(
+            &["/Applications/YesPlayMusic.app".into()],
+            "/tmp"
+        ));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_startup_gate_tests {
+    use super::{acquire_macos_startup_gate, single_instance_socket_path, startup_gate_path};
+    use std::{sync::mpsc, thread, time::Duration};
+
+    #[test]
+    fn startup_gate_serializes_cold_processes_before_the_plugin_listener() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("startup.lock");
+        let first = acquire_macos_startup_gate(&path, Duration::from_secs(1)).unwrap();
+        let (acquired, receiver) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _second = acquire_macos_startup_gate(&path, Duration::from_secs(1)).unwrap();
+            acquired.send(()).unwrap();
+        });
+
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(first);
+        receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn paths_match_the_locked_single_instance_plugin_contract() {
+        assert_eq!(
+            single_instance_socket_path("com.electron.yesplaymusic"),
+            std::path::PathBuf::from("/tmp/com_electron_yesplaymusic_si.sock")
+        );
+        assert!(startup_gate_path("com.electron.yesplaymusic")
+            .ends_with("com_electron_yesplaymusic_startup.lock"));
+    }
 }
 
 #[tauri::command]
 fn updater_configured() -> bool {
     updater_public_key().is_some()
+}
+
+fn updater_requires_explicit_sidecar_shutdown(os: &str) -> bool {
+    os == "windows"
+}
+
+fn single_instance_notification_is_probe(args: &[String], cwd: &str) -> bool {
+    cwd.is_empty() && args == [""]
+}
+
+#[tauri::command]
+fn prepare_for_update(app: AppHandle) -> Result<bool, String> {
+    if !updater_requires_explicit_sidecar_shutdown(std::env::consts::OS) {
+        return Ok(false);
+    }
+    let Some(state) = app.try_state::<SidecarState>() else {
+        return Ok(false);
+    };
+    state.shutdown_requested.store(true, Ordering::Release);
+    if stop_sidecar_gracefully(&app) {
+        Ok(true)
+    } else {
+        Err("无法确认旧版后台服务已退出，已取消安装".into())
+    }
 }
 
 fn app_about_metadata(version: &str) -> AboutMetadata<'static> {
@@ -319,8 +491,29 @@ fn create_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SidecarProcessIdentity {
+    pid: u32,
+    generation: usize,
+}
+
+#[derive(Default)]
+struct SidecarProcessSlot {
+    child: Option<CommandChild>,
+    current: Option<SidecarProcessIdentity>,
+}
+
+#[derive(Default)]
+struct SidecarTerminationWait {
+    expected: Option<SidecarProcessIdentity>,
+    terminated: bool,
+}
+
 struct SidecarState {
-    child: Mutex<Option<CommandChild>>,
+    process: Mutex<SidecarProcessSlot>,
+    next_generation: AtomicUsize,
+    termination_wait: Mutex<SidecarTerminationWait>,
+    termination_changed: Condvar,
     shutdown_requested: AtomicBool,
     restart_attempts: AtomicUsize,
     replacement_ready: AtomicBool,
@@ -1773,11 +1966,11 @@ fn wait_for_supervised_sidecar(
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if replacement_ready.load(Ordering::Acquire) {
-            return Ok(());
-        }
         if permanently_unavailable.load(Ordering::Acquire) {
             return Err("YesPlayMusic sidecar exhausted its restart budget".into());
+        }
+        if replacement_ready.load(Ordering::Acquire) {
+            return Ok(());
         }
         if sidecar_identity_matches(address, initial_token) {
             return Ok(());
@@ -1809,37 +2002,22 @@ fn start_sidecar(
     upstream_proxy: Option<&str>,
 ) -> Result<(tauri::async_runtime::Receiver<CommandEvent>, CommandChild), String> {
     #[cfg(debug_assertions)]
-    let command = {
-        let mut args = vec![
-            "../src/sidecar.ts".to_string(),
-            "--api-only".to_string(),
-            "--api-port".to_string(),
-            API_PORT.to_string(),
-            "--parent-pid".to_string(),
-            std::process::id().to_string(),
-        ];
-        if let Some(proxy) = upstream_proxy {
-            args.extend([
-                "--upstream-proxy".to_string(),
-                proxy.to_string(),
-                "--proxy-relay-port".to_string(),
-                WEBVIEW_PROXY_RELAY_PORT.to_string(),
-            ]);
-        }
-        app.shell()
-            .command("bun")
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .args(args)
-    };
+    let mut args = vec![
+        "--api-only".to_string(),
+        "--api-port".to_string(),
+        API_PORT.to_string(),
+        "--parent-pid".to_string(),
+        std::process::id().to_string(),
+    ];
 
     #[cfg(not(debug_assertions))]
-    let command = {
+    let mut args = {
         let renderer_dir = app
             .path()
             .resource_dir()
             .map_err(|error| error.to_string())?
             .join("renderer");
-        let mut args = vec![
+        vec![
             "--api-port".to_string(),
             API_PORT.to_string(),
             "--web-port".to_string(),
@@ -1848,20 +2026,22 @@ fn start_sidecar(
             renderer_dir.to_string_lossy().into_owned(),
             "--parent-pid".to_string(),
             std::process::id().to_string(),
-        ];
-        if let Some(proxy) = upstream_proxy {
-            args.extend([
-                "--upstream-proxy".to_string(),
-                proxy.to_string(),
-                "--proxy-relay-port".to_string(),
-                WEBVIEW_PROXY_RELAY_PORT.to_string(),
-            ]);
-        }
-        app.shell()
-            .sidecar("yesplaymusic-sidecar")
-            .map_err(|error| error.to_string())?
-            .args(args)
+        ]
     };
+
+    if let Some(proxy) = upstream_proxy {
+        args.extend([
+            "--upstream-proxy".to_string(),
+            proxy.to_string(),
+            "--proxy-relay-port".to_string(),
+            WEBVIEW_PROXY_RELAY_PORT.to_string(),
+        ]);
+    }
+    let command = app
+        .shell()
+        .sidecar("yesplaymusic-sidecar")
+        .map_err(|error| error.to_string())?
+        .args(args);
 
     let (events, mut child) = command.spawn().map_err(|error| error.to_string())?;
     // An anonymous stdin pipe keeps the token out of process listings.
@@ -1873,26 +2053,27 @@ fn start_sidecar(
     Ok((events, child))
 }
 
-fn stop_sidecar(app: &AppHandle) {
+fn kill_sidecar(app: &AppHandle) {
     let Some(state) = app.try_state::<SidecarState>() else {
         return;
     };
-    let child = state.child.lock().ok().and_then(|mut child| child.take());
+    let child = state
+        .process
+        .lock()
+        .ok()
+        .and_then(|mut process| process.child.take());
     if let Some(child) = child {
         let _ = child.kill();
     }
 }
 
-fn stop_sidecar_if_pid(app: &AppHandle, expected_pid: u32) {
+fn kill_sidecar_if_current(app: &AppHandle, expected: SidecarProcessIdentity) {
     let Some(state) = app.try_state::<SidecarState>() else {
         return;
     };
-    let child = state.child.lock().ok().and_then(|mut child| {
-        if child
-            .as_ref()
-            .is_some_and(|current| current.pid() == expected_pid)
-        {
-            child.take()
+    let child = state.process.lock().ok().and_then(|mut process| {
+        if process.current == Some(expected) {
+            process.child.take()
         } else {
             None
         }
@@ -1902,44 +2083,165 @@ fn stop_sidecar_if_pid(app: &AppHandle, expected_pid: u32) {
     }
 }
 
+fn mark_replacement_ready_if_current(
+    state: &SidecarState,
+    expected: SidecarProcessIdentity,
+) -> bool {
+    let Ok(process) = state.process.lock() else {
+        return false;
+    };
+    if process.current != Some(expected)
+        || state.shutdown_requested.load(Ordering::Acquire)
+        || state.permanently_unavailable.load(Ordering::Acquire)
+    {
+        return false;
+    }
+    state.replacement_ready.store(true, Ordering::Release);
+    true
+}
+
+fn prepare_sidecar_termination_wait(state: &SidecarState, expected: SidecarProcessIdentity) {
+    if let Ok(mut termination_wait) = state.termination_wait.lock() {
+        termination_wait.expected = Some(expected);
+        termination_wait.terminated = false;
+    }
+}
+
+fn record_sidecar_termination(
+    state: &SidecarState,
+    identity: SidecarProcessIdentity,
+    received_termination: bool,
+) {
+    if !received_termination {
+        return;
+    }
+    if let Ok(mut termination_wait) = state.termination_wait.lock() {
+        if termination_wait.expected != Some(identity) {
+            return;
+        }
+        termination_wait.terminated = true;
+        state.termination_changed.notify_all();
+    }
+}
+
+fn wait_for_sidecar_termination(
+    state: &SidecarState,
+    expected: SidecarProcessIdentity,
+    timeout: Duration,
+) -> bool {
+    let Ok(termination_wait) = state.termination_wait.lock() else {
+        return false;
+    };
+    let Ok((termination_wait, _)) =
+        state
+            .termination_changed
+            .wait_timeout_while(termination_wait, timeout, |wait| {
+                wait.expected == Some(expected) && !wait.terminated
+            })
+    else {
+        return false;
+    };
+    termination_wait.expected == Some(expected) && termination_wait.terminated
+}
+
+fn clear_sidecar_termination_wait(state: &SidecarState, expected: SidecarProcessIdentity) {
+    if let Ok(mut termination_wait) = state.termination_wait.lock() {
+        if termination_wait.expected == Some(expected) {
+            *termination_wait = SidecarTerminationWait::default();
+        }
+    }
+}
+
+fn stop_sidecar_gracefully(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<SidecarState>() else {
+        return true;
+    };
+    let process = state.process.lock().ok().and_then(|mut process| {
+        let identity = process.current?;
+        process.child.take().map(|child| {
+            prepare_sidecar_termination_wait(state.inner(), identity);
+            (identity, child)
+        })
+    });
+    let Some((identity, mut child)) = process else {
+        return true;
+    };
+
+    // Keep CommandChild's process handle until shutdown is confirmed. This avoids ever sending a
+    // fallback kill to a bare PID that the OS could already have reused.
+    if let Err(error) = child.write(SIDECAR_SHUTDOWN_SIGNAL) {
+        eprintln!("[sidecar] failed to request graceful shutdown: {error}");
+    }
+    if wait_for_sidecar_termination(state.inner(), identity, SIDECAR_GRACEFUL_SHUTDOWN_TIMEOUT) {
+        clear_sidecar_termination_wait(state.inner(), identity);
+        return true;
+    }
+
+    eprintln!(
+        "[sidecar] graceful shutdown timed out for pid {}; forcing termination",
+        identity.pid
+    );
+    if let Err(error) = child.kill() {
+        eprintln!("[sidecar] failed to force termination: {error}");
+        clear_sidecar_termination_wait(state.inner(), identity);
+        return false;
+    }
+    let terminated =
+        wait_for_sidecar_termination(state.inner(), identity, SIDECAR_FORCED_SHUTDOWN_TIMEOUT);
+    if !terminated {
+        eprintln!(
+            "[sidecar] termination event timed out for pid {}",
+            identity.pid
+        );
+    }
+    clear_sidecar_termination_wait(state.inner(), identity);
+    terminated
+}
+
 fn install_sidecar_process(
     app: &AppHandle,
     child: CommandChild,
     events: tauri::async_runtime::Receiver<CommandEvent>,
     config: SidecarLaunchConfig,
-) -> bool {
+) -> Option<SidecarProcessIdentity> {
     let state = app.state::<SidecarState>();
     if state.shutdown_requested.load(Ordering::Acquire) {
         let _ = child.kill();
-        return false;
+        return None;
     }
-    match state.child.lock() {
-        Ok(mut current) => {
-            if current.is_some() {
+    let identity = SidecarProcessIdentity {
+        pid: child.pid(),
+        generation: state.next_generation.fetch_add(1, Ordering::AcqRel) + 1,
+    };
+    match state.process.lock() {
+        Ok(mut process) => {
+            if process.current.is_some() {
                 eprintln!("[sidecar] refused to replace a running process");
                 let _ = child.kill();
-                return false;
+                return None;
             }
-            *current = Some(child);
+            process.current = Some(identity);
+            process.child = Some(child);
         }
         Err(error) => {
             eprintln!("[sidecar] failed to store the process handle: {error}");
             let _ = child.kill();
-            return false;
+            return None;
         }
     }
     if state.shutdown_requested.load(Ordering::Acquire) {
-        stop_sidecar(app);
-        return false;
+        kill_sidecar(app);
+        return None;
     }
-    monitor_sidecar_events(app.clone(), events, config);
-    true
+    monitor_sidecar_events(app.clone(), events, config, identity);
+    Some(identity)
 }
 
 fn monitor_sidecar_events(
     app: AppHandle,
     mut events: tauri::async_runtime::Receiver<CommandEvent>,
     config: SidecarLaunchConfig,
+    identity: SidecarProcessIdentity,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut received_termination = false;
@@ -1960,19 +2262,30 @@ fn monitor_sidecar_events(
             }
         }
 
-        let child = app
-            .state::<SidecarState>()
-            .child
+        let state = app.state::<SidecarState>();
+        let (child, was_current) = state
+            .process
             .lock()
-            .ok()
-            .and_then(|mut child| child.take());
+            .map(|mut process| {
+                if process.current == Some(identity) {
+                    process.current = None;
+                    state.replacement_ready.store(false, Ordering::Release);
+                    (process.child.take(), true)
+                } else {
+                    (None, false)
+                }
+            })
+            .unwrap_or((None, false));
         if !received_termination {
             if let Some(child) = child {
                 let _ = child.kill();
             }
             eprintln!("[sidecar] event stream closed before termination");
         }
-        handle_sidecar_exit(app, config);
+        record_sidecar_termination(state.inner(), identity, received_termination);
+        if was_current {
+            handle_sidecar_exit(app, config);
+        }
     });
 }
 
@@ -2027,10 +2340,11 @@ fn handle_sidecar_exit(app: AppHandle, config: SidecarLaunchConfig) {
                         return;
                     }
                 };
-                let child_pid = child.pid();
-                if !install_sidecar_process(&app, child, events, restarted_config.clone()) {
+                let Some(identity) =
+                    install_sidecar_process(&app, child, events, restarted_config.clone())
+                else {
                     return;
-                }
+                };
 
                 let ready_port = restarted_config.ready_port;
                 let health_token = restarted_config.health_token.clone();
@@ -2041,17 +2355,23 @@ fn handle_sidecar_exit(app: AppHandle, config: SidecarLaunchConfig) {
                 match health {
                     Ok(Ok(())) => {
                         let state = app.state::<SidecarState>();
-                        state.replacement_ready.store(true, Ordering::Release);
-                        println!("[sidecar] restart passed the health check");
-                        schedule_stable_restart_budget_reset(app.clone(), child_pid);
+                        if mark_replacement_ready_if_current(state.inner(), identity) {
+                            println!("[sidecar] restart passed the health check");
+                            schedule_stable_restart_budget_reset(app.clone(), identity);
+                        } else {
+                            eprintln!(
+                                "[sidecar] ignored a stale health result for pid {}",
+                                identity.pid
+                            );
+                        }
                     }
                     Ok(Err(error)) => {
                         eprintln!("[sidecar] restarted process is unhealthy: {error}");
-                        stop_sidecar_if_pid(&app, child_pid);
+                        kill_sidecar_if_current(&app, identity);
                     }
                     Err(error) => {
                         eprintln!("[sidecar] restart health task failed: {error}");
-                        stop_sidecar_if_pid(&app, child_pid);
+                        kill_sidecar_if_current(&app, identity);
                     }
                 }
             });
@@ -2059,11 +2379,15 @@ fn handle_sidecar_exit(app: AppHandle, config: SidecarLaunchConfig) {
     }
 }
 
-fn should_reset_restart_budget(ready: bool, current_pid: Option<u32>, expected_pid: u32) -> bool {
-    ready && current_pid == Some(expected_pid)
+fn should_reset_restart_budget(
+    ready: bool,
+    current: Option<SidecarProcessIdentity>,
+    expected: SidecarProcessIdentity,
+) -> bool {
+    ready && current == Some(expected)
 }
 
-fn schedule_stable_restart_budget_reset(app: AppHandle, expected_pid: u32) {
+fn schedule_stable_restart_budget_reset(app: AppHandle, expected: SidecarProcessIdentity) {
     tauri::async_runtime::spawn(async move {
         let _ =
             tauri::async_runtime::spawn_blocking(|| thread::sleep(Duration::from_secs(30))).await;
@@ -2071,15 +2395,15 @@ fn schedule_stable_restart_budget_reset(app: AppHandle, expected_pid: u32) {
         if state.shutdown_requested.load(Ordering::Acquire) {
             return;
         }
-        let current_pid = state
-            .child
+        let current = state
+            .process
             .lock()
             .ok()
-            .and_then(|child| child.as_ref().map(CommandChild::pid));
+            .and_then(|process| process.current);
         if should_reset_restart_budget(
             state.replacement_ready.load(Ordering::Acquire),
-            current_pid,
-            expected_pid,
+            current,
+            expected,
         ) {
             state.restart_attempts.store(0, Ordering::Release);
         }
@@ -2136,7 +2460,7 @@ fn create_main_window(
     let window = builder
         .on_page_load(|_, payload| {
             if payload.event() == PageLoadEvent::Finished {
-                println!("[tauri] webview-ready: {}", payload.url());
+                println!("[tauri] webview-ready:");
             }
         })
         .build()?;
@@ -2227,11 +2551,24 @@ fn main() {
         updater = updater.pubkey(public_key);
     }
 
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    let single_instance_socket = single_instance_socket_path(&context.config().identifier);
+    #[cfg(target_os = "macos")]
+    let startup_gate = acquire_macos_startup_gate(
+        &startup_gate_path(&context.config().identifier),
+        SINGLE_INSTANCE_STARTUP_TIMEOUT,
+    )
+    .expect("failed to serialize macOS cold startup");
+
     let app = tauri::Builder::default()
         .menu(create_app_menu)
         .on_menu_event(|app, event| handle_app_menu_event(app, event.id().as_ref()))
         // Register single-instance handling before a second process can bind sidecar ports.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            if single_instance_notification_is_probe(&args, &cwd) {
+                return;
+            }
             if let Err(error) = show_main_window(app) {
                 eprintln!("[tauri] failed to restore the main window: {error}");
             }
@@ -2340,7 +2677,10 @@ fn main() {
                 ready_port,
             };
             app.manage(SidecarState {
-                child: Mutex::new(None),
+                process: Mutex::new(SidecarProcessSlot::default()),
+                next_generation: AtomicUsize::new(0),
+                termination_wait: Mutex::new(SidecarTerminationWait::default()),
+                termination_changed: Condvar::new(),
                 shutdown_requested: AtomicBool::new(false),
                 restart_attempts: AtomicUsize::new(0),
                 replacement_ready: AtomicBool::new(false),
@@ -2361,7 +2701,9 @@ fn main() {
                     );
                 }
             };
-            if !install_sidecar_process(app.handle(), child, events, sidecar_config.clone()) {
+            if install_sidecar_process(app.handle(), child, events, sidecar_config.clone())
+                .is_none()
+            {
                 return handle_sidecar_startup_failure(
                     app.handle(),
                     ready_port,
@@ -2380,7 +2722,7 @@ fn main() {
                 sidecar_state
                     .shutdown_requested
                     .store(true, Ordering::Release);
-                stop_sidecar(app.handle());
+                kill_sidecar(app.handle());
                 return handle_sidecar_startup_failure(
                     app.handle(),
                     ready_port,
@@ -2439,10 +2781,18 @@ fn main() {
             restore_compact_window,
             read_legacy_settings,
             legacy_renderer_data::import_legacy_renderer_data,
-            updater_configured
+            updater_configured,
+            prepare_for_update
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build Tauri application");
+
+    #[cfg(target_os = "macos")]
+    {
+        wait_for_single_instance_listener(&single_instance_socket, SINGLE_INSTANCE_STARTUP_TIMEOUT)
+            .expect("single-instance listener did not become ready");
+        drop(startup_gate);
+    }
 
     app.run(|app, event| match event {
         RunEvent::Exit => {
@@ -2459,7 +2809,7 @@ fn main() {
             if let Some(state) = app.try_state::<SidecarState>() {
                 state.shutdown_requested.store(true, Ordering::Release);
             }
-            stop_sidecar(app);
+            let _ = stop_sidecar_gracefully(app);
         }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
@@ -2474,15 +2824,41 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_about_metadata, app_menu_action, claim_startup_show, decode_tray_cover, is_smoke_test,
-        is_webview_smoke_test, normalize_global_shortcut, parse_legacy_settings,
-        response_has_sidecar_identity, should_reset_restart_budget, sidecar_exit_action,
-        sidecar_startup_error_message, tray_cover_url, tray_recovery_available,
-        tray_title_for_visibility, wait_for_supervised_sidecar, window_frame_has_reachable_area,
-        AppMenuAction, SidecarExitAction,
+        app_about_metadata, app_menu_action, claim_startup_show, clear_sidecar_termination_wait,
+        decode_tray_cover, is_smoke_test, is_webview_smoke_test, mark_replacement_ready_if_current,
+        normalize_global_shortcut, parse_legacy_settings, prepare_sidecar_termination_wait,
+        record_sidecar_termination, response_has_sidecar_identity, should_reset_restart_budget,
+        sidecar_exit_action, sidecar_startup_error_message, tray_cover_url,
+        tray_recovery_available, tray_title_for_visibility, wait_for_sidecar_termination,
+        wait_for_supervised_sidecar, window_frame_has_reachable_area, AppMenuAction,
+        SidecarExitAction, SidecarProcessIdentity, SidecarProcessSlot, SidecarState,
+        SidecarTerminationWait,
     };
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Condvar, Mutex,
+        },
+        thread,
+        time::Duration,
+    };
     use tauri_plugin_global_shortcut::Shortcut;
+
+    fn sidecar_state(current: Option<SidecarProcessIdentity>) -> SidecarState {
+        SidecarState {
+            process: Mutex::new(SidecarProcessSlot {
+                child: None,
+                current,
+            }),
+            next_generation: AtomicUsize::new(0),
+            termination_wait: Mutex::new(SidecarTerminationWait::default()),
+            termination_changed: Condvar::new(),
+            shutdown_requested: AtomicBool::new(false),
+            restart_attempts: AtomicUsize::new(0),
+            replacement_ready: AtomicBool::new(false),
+            permanently_unavailable: AtomicBool::new(false),
+        }
+    }
 
     #[test]
     fn smoke_test_must_be_explicit() {
@@ -2634,10 +3010,106 @@ mod tests {
     }
 
     #[test]
+    fn permanent_failure_wins_over_a_previous_ready_signal() {
+        let replacement_ready = AtomicBool::new(true);
+        let permanently_unavailable = AtomicBool::new(true);
+
+        assert!(wait_for_supervised_sidecar(
+            0,
+            "dead-initial-token",
+            &replacement_ready,
+            &permanently_unavailable,
+            Duration::from_millis(50),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn replacement_health_only_marks_the_current_live_generation_ready() {
+        let current = SidecarProcessIdentity {
+            pid: 42,
+            generation: 2,
+        };
+        let stale = SidecarProcessIdentity {
+            pid: 42,
+            generation: 1,
+        };
+        let state = sidecar_state(Some(current));
+
+        assert!(!mark_replacement_ready_if_current(&state, stale));
+        assert!(!state.replacement_ready.load(Ordering::Acquire));
+        assert!(mark_replacement_ready_if_current(&state, current));
+
+        state.replacement_ready.store(false, Ordering::Release);
+        state.permanently_unavailable.store(true, Ordering::Release);
+        assert!(!mark_replacement_ready_if_current(&state, current));
+        assert!(!state.replacement_ready.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn graceful_shutdown_waits_only_for_a_confirmed_matching_termination() {
+        let state = Arc::new(sidecar_state(None));
+        let expected = SidecarProcessIdentity {
+            pid: 42,
+            generation: 3,
+        };
+        prepare_sidecar_termination_wait(&state, expected);
+
+        record_sidecar_termination(&state, expected, false);
+        assert!(!wait_for_sidecar_termination(
+            &state,
+            expected,
+            Duration::from_millis(10)
+        ));
+
+        let notifier = Arc::clone(&state);
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            record_sidecar_termination(&notifier, expected, true);
+        });
+
+        assert!(wait_for_sidecar_termination(
+            &state,
+            expected,
+            Duration::from_secs(1)
+        ));
+        assert!(!wait_for_sidecar_termination(
+            &state,
+            SidecarProcessIdentity {
+                pid: 42,
+                generation: 4,
+            },
+            Duration::from_millis(10)
+        ));
+        thread.join().unwrap();
+
+        clear_sidecar_termination_wait(&state, expected);
+        assert!(state
+            .termination_wait
+            .lock()
+            .is_ok_and(|wait| wait.expected.is_none() && !wait.terminated));
+    }
+
+    #[test]
     fn stable_generation_resets_only_its_own_restart_budget() {
-        assert!(should_reset_restart_budget(true, Some(42), 42));
-        assert!(!should_reset_restart_budget(false, Some(42), 42));
-        assert!(!should_reset_restart_budget(true, Some(43), 42));
+        let expected = SidecarProcessIdentity {
+            pid: 42,
+            generation: 2,
+        };
+        assert!(should_reset_restart_budget(true, Some(expected), expected));
+        assert!(!should_reset_restart_budget(
+            false,
+            Some(expected),
+            expected
+        ));
+        assert!(!should_reset_restart_budget(
+            true,
+            Some(SidecarProcessIdentity {
+                pid: 42,
+                generation: 3
+            }),
+            expected
+        ));
     }
 
     #[test]

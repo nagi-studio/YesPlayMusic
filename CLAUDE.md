@@ -32,11 +32,21 @@ CI（`.github/workflows/build.yaml`）只验证每次 push 的**最后一个 com
 
 ## 发版
 
-版本号要同时改三处：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`
-（Cargo.lock 跟着更新）。`bun run verify:tauri:version` 会校验三者与 tag 一致，CI 里也会跑。
+版本号要同时改四处：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、
+`src-tauri/sidecar/Cargo.toml`（Cargo.lock 里的两个 workspace package 跟着更新）。
+`bun run verify:tauri:version` 会校验所有位置与 tag 一致，CI 里也会跑。
 
-推 `v*` tag 触发 `.github/workflows/build.yaml`：公证构建 → 建**草稿** release。
-草稿要手动发布：`gh release edit vX.Y.Z --draft=false --latest`。
+推 `v*` tag 触发 `.github/workflows/build.yaml`：三平台构建（配置 Apple 签名时包含公证）→
+建**草稿** release。正式版草稿用 `gh release edit vX.Y.Z --draft=false --latest` 发布；
+canary 等预发布版本必须用
+`gh release edit vX.Y.Z-canary.N --draft=false --prerelease --latest=false`，不能设为 latest。
+canary 发布后的 `release.published` 会触发 `.github/workflows/publish-canary-updater-feed.yaml`：
+它只在最终 artifact 与 `TAURI_UPDATER_PUBKEY` 验签通过后推进独立 canary feed；不要手工改
+`updater-feed` 分支，也不要让草稿提前进入 feed。stable 继续使用 GitHub latest，不会收到 canary。
+
+当前 macOS 发布政策固定使用 adhoc Hardened Runtime DMG，`APPLE_SIGNING_ENABLED` 保持非
+`true`；Developer ID 与公证不是验收门禁。CI 中的 Apple 签名分支只保留为未来可选能力。
+Tauri updater 的 Minisign 密钥是另一套完整性门禁，不能因为不做 Developer ID 而关闭。
 
 **发布前必须手写 release 正文**，不能只留自动生成的 Full Changelog 链接。
 仓库没有 CHANGELOG 文件，变更记录只存在于 release 正文里。格式照 v0.6.2 / v0.6.3：
@@ -60,8 +70,9 @@ TypeScript 开启严格模式、`exactOptionalPropertyTypes` 和
 ## 架构要点
 
 Tauri 主进程入口是 `src-tauri/src/main.rs`，负责窗口、托盘、快捷键、单实例和 Sidecar
-生命周期。`src/sidecar.ts` 会编译成各平台独立可执行文件，负责网易云 API、托管渲染
-产物、同源 `/api` 代理和 UNM。正式版页面来自 `http://127.0.0.1:28232`。
+生命周期。`src-tauri/sidecar/` 会编译成各平台独立的 Rust 可执行文件，负责网易云 API、
+托管渲染产物、同源 `/api` 代理和 UNM。正式版页面来自 `http://127.0.0.1:28232`；
+`12754` API 端口在 dev 和 release 都会监听。
 
 **生产模式不走 `app://` 协议**，而是加载 Sidecar 的 loopback HTTP 页面。
 dev 的 Vite server 也配了 `/api` 同源代理指向 12754 —— 这个不能省，否则跨端口属于跨站，登录 cookie 会被
@@ -84,8 +95,8 @@ WebView 按 origin 隔离存储，而 dev 和正式版端口不同：
 
 ## 已知的坑
 
-1. `src/ncmModDef.cjs` 是刻意保留的 CommonJS 边界，必须静态 `import`，让 Bun
-   单文件 Sidecar 能收集网易云 API 的全部路由。
+1. `src/ncmModDef.cjs` 是刻意保留的 Bun 参考实现 CommonJS 边界，必须静态 `import`，
+   让 differential oracle 能收集网易云 API 路由；正式安装包只运行 Rust Sidecar。
 2. `vite-plugin-svg-icons` 只在 dev server 启动时扫一遍 `src/assets/icons`，
    新加的 svg 要重启 dev 才会进 sprite，否则图标位置是空白。
 3. `.player` 上有 `backdrop-filter`，超出它上边界的子元素会被裁掉 —— 进度条上的角色

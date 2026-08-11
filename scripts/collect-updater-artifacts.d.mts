@@ -11,7 +11,8 @@ export const UPDATER_ARTIFACT_SPECS: Readonly<
 export function collectUpdaterArtifacts(
   target: string,
   outputDir: string,
-  root?: string
+  root?: string,
+  publicKey?: string
 ): Promise<{
   artifactName: string;
   artifactPath: string;

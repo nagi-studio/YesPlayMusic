@@ -5,9 +5,11 @@ export interface UpdaterBuildPlan {
 }
 
 export const UPDATER_BUILD_PLANS: Readonly<Record<string, UpdaterBuildPlan>>;
+export const CANARY_UPDATER_ENDPOINT: string;
 
 export function createUpdaterBuildConfig(
-  publicKey: string
+  publicKey: string,
+  version?: string
 ): Promise<Record<string, unknown>>;
 
 export function buildTauriUpdater(

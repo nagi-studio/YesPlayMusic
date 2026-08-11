@@ -1,3 +1,5 @@
+import { validateUpdaterPublicKey } from './verify-updater-signature.mjs';
+
 export const REQUIRED_UPDATER_RELEASE_ENV = [
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
@@ -13,6 +15,7 @@ export function verifyUpdaterReleaseEnvironment(environment = process.env) {
       `Missing updater release configuration: ${missing.join(', ')}`
     );
   }
+  validateUpdaterPublicKey(environment.TAURI_UPDATER_PUBKEY);
   return true;
 }
 

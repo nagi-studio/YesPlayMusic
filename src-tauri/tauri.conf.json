@@ -1,11 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "YesPlayMusic",
-  "version": "0.7.0",
+  "version": "0.8.0-canary.1",
   "identifier": "com.electron.yesplaymusic",
   "mainBinaryName": "yesplaymusic-tauri",
   "build": {
-    "beforeDevCommand": "bun run build:sidecar && bun run dev:tauri:renderer",
+    "beforeDevCommand": "bun run build:sidecar:dev && bun run dev:tauri:renderer",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "bun run build:tauri:renderer && bun run build:sidecar",
     "frontendDist": "http://127.0.0.1:28232"
@@ -35,7 +35,10 @@
     "category": "Music",
     "externalBin": ["binaries/yesplaymusic-sidecar"],
     "resources": {
-      "../dist-tauri/": "renderer/"
+      "../dist-tauri/": "renderer/",
+      "generated/app-compliance/": "app-compliance/",
+      "generated/sidecar-compliance/": "sidecar-compliance/",
+      "tauri.conf.json": "updater-artifact-version.json"
     },
     "icon": [
       "../build/icons/32x32.png",

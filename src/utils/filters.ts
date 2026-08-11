@@ -2,12 +2,38 @@ import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import locale from '@/locale';
+import { normalizePersistedLocale } from '@/locale/catalog';
+import type { LocaleCode } from '@/locale/catalog';
 import { buildArtworkURL } from '@/utils/artwork';
 
 dayjs.extend(duration);
 dayjs.extend(relativeTime);
 
-const currentLocale = () => locale.global.locale;
+const activeLocale = (): LocaleCode =>
+  normalizePersistedLocale(locale.global.locale);
+
+const DURATION_UNITS: Record<LocaleCode, { hour: string; minute: string }> = {
+  en: { hour: 'hr', minute: 'min' },
+  ja: { hour: '時間', minute: '分' },
+  'zh-CN': { hour: '小时', minute: '分钟' },
+  'zh-TW': { hour: '小時', minute: '分鐘' },
+};
+
+/** Locales that write dates as year-month-day with unit characters. */
+const DATE_FORMATS: Partial<Record<LocaleCode, string>> = {
+  ja: 'YYYY年M月D日',
+  'zh-CN': 'YYYY年MM月DD日',
+  'zh-TW': 'YYYY年MM月DD日',
+};
+
+/** Locales that group large numbers by 万 instead of by thousand. */
+const MYRIAD_UNITS: Partial<
+  Record<LocaleCode, { unit: string; squared: string }>
+> = {
+  ja: { unit: '万', squared: '億' },
+  'zh-CN': { unit: '万', squared: '亿' },
+  'zh-TW': { unit: '萬', squared: '億' },
+};
 
 export function formatTime(
   Milliseconds: number | null | undefined,
@@ -25,24 +51,10 @@ export function formatTime(
       ? `${hours}:${mins.padStart(2, '0')}:${seconds}`
       : `${mins}:${seconds}`;
   } else if (format === 'Human') {
-    let hoursUnit, minitesUnit;
-    switch (currentLocale()) {
-      case 'zh-CN':
-        hoursUnit = '小时';
-        minitesUnit = '分钟';
-        break;
-      case 'zh-TW':
-        hoursUnit = '小時';
-        minitesUnit = '分鐘';
-        break;
-      default:
-        hoursUnit = 'hr';
-        minitesUnit = 'min';
-        break;
-    }
+    const { hour, minute } = DURATION_UNITS[activeLocale()];
     return hours !== '0'
-      ? `${hours} ${hoursUnit} ${mins} ${minitesUnit}`
-      : `${mins} ${minitesUnit}`;
+      ? `${hours} ${hour} ${mins} ${minute}`
+      : `${mins} ${minute}`;
   }
   return '';
 }
@@ -52,9 +64,7 @@ export function formatDate(
   format = 'MMM D, YYYY'
 ): string {
   if (!timestamp) return '';
-  if (currentLocale() === 'zh-CN') format = 'YYYY年MM月DD日';
-  else if (currentLocale() === 'zh-TW') format = 'YYYY年MM月DD日';
-  return dayjs(timestamp).format(format);
+  return dayjs(timestamp).format(DATE_FORMATS[activeLocale()] ?? format);
 }
 
 export function formatAlbumType(
@@ -81,40 +91,24 @@ export function formatPlayCount(
   count: number | null | undefined
 ): string | number {
   if (!count) return '';
-  if (currentLocale() === 'zh-CN') {
+  const myriad = MYRIAD_UNITS[activeLocale()];
+  if (myriad) {
+    // 万-based grouping: 2.32亿 / 232.1万 / 2.3万.
     if (count > 100000000) {
-      return `${Math.floor((count / 100000000) * 100) / 100}亿`; // Example: 2.32 hundred million.
+      return `${Math.floor((count / 100000000) * 100) / 100}${myriad.squared}`;
     }
     if (count > 100000) {
-      return `${Math.floor((count / 10000) * 10) / 10}万`; // Example: 232.1 ten-thousands.
+      return `${Math.floor((count / 10000) * 10) / 10}${myriad.unit}`;
     }
     if (count > 10000) {
-      return `${Math.floor((count / 10000) * 100) / 100}万`; // Example: 2.3 ten-thousands.
-    }
-    return count;
-  } else if (currentLocale() === 'zh-TW') {
-    if (count > 100000000) {
-      return `${Math.floor((count / 100000000) * 100) / 100}億`; // Example: 2.32 hundred million.
-    }
-    if (count > 100000) {
-      return `${Math.floor((count / 10000) * 10) / 10}萬`; // Example: 232.1 ten-thousands.
-    }
-    if (count > 10000) {
-      return `${Math.floor((count / 10000) * 100) / 100}萬`; // Example: 2.3 ten-thousands.
-    }
-    return count;
-  } else {
-    if (count > 10000000) {
-      return `${Math.floor((count / 1000000) * 10) / 10}M`; // 233.2M
-    }
-    if (count > 1000000) {
-      return `${Math.floor((count / 1000000) * 100) / 100}M`; // 2.3M
-    }
-    if (count > 1000) {
-      return `${Math.floor((count / 1000) * 100) / 100}K`; // 233.23K
+      return `${Math.floor((count / 10000) * 100) / 100}${myriad.unit}`;
     }
     return count;
   }
+  if (count > 10000000) return `${Math.floor((count / 1000000) * 10) / 10}M`;
+  if (count > 1000000) return `${Math.floor((count / 1000000) * 100) / 100}M`;
+  if (count > 1000) return `${Math.floor((count / 1000) * 100) / 100}K`;
+  return count;
 }
 
 export function toHttps(url: string | null | undefined): string {

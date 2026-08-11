@@ -2,6 +2,8 @@ import { isAccountLoggedIn } from './auth';
 import { refreshCookie } from '@/api/auth';
 import dayjs from 'dayjs';
 import { getAppStore } from '@/stores/accessor';
+import { normalizePersistedLocale } from '@/locale/catalog';
+import type { LocaleCode } from '@/locale/catalog';
 import type { Track, TrackPrivilege } from '@/types/domain';
 
 interface ThemeColors {
@@ -312,6 +314,13 @@ export function splitAlbumTitle(title: string): {
   };
 }
 
+const BYTE_UNITS: Record<LocaleCode, string> = {
+  en: ' Bytes',
+  ja: ' バイト',
+  'zh-CN': '字节',
+  'zh-TW': '位元組',
+};
+
 export function bytesToSize(bytes: number): string {
   const marker = 1024; // Change to 1000 if required
   const decimal = 2; // Change as required
@@ -319,9 +328,11 @@ export function bytesToSize(bytes: number): string {
   const megaBytes = marker * marker;
   const gigaBytes = marker * marker * marker;
 
-  const lang = getAppStore().settings.lang;
+  // The unit below one kilobyte is the only localised one; KB/MB/GB are universal.
+  const byteUnit =
+    BYTE_UNITS[normalizePersistedLocale(getAppStore().settings.lang)];
 
-  if (bytes < kiloBytes) return bytes + (lang === 'en' ? ' Bytes' : '字节');
+  if (bytes < kiloBytes) return bytes + byteUnit;
   else if (bytes < megaBytes)
     return (bytes / kiloBytes).toFixed(decimal) + ' KB';
   else if (bytes < gigaBytes)

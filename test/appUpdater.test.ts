@@ -20,6 +20,7 @@ describe('Tauri updater flow', () => {
         checked = true;
         return null;
       },
+      prepareForInstall: async () => false,
       relaunch: async () => {},
     };
 
@@ -32,23 +33,33 @@ describe('Tauri updater flow', () => {
   test('checks, downloads, installs, and relaunches a signed update', async () => {
     let relaunched = false;
     let closed = false;
+    const installOrder: string[] = [];
     const bindings: AppUpdaterBindings = {
       isConfigured: async () => true,
       check: async () => ({
         version: '0.7.0',
         body: 'Release notes',
         date: '2026-08-10T00:00:00Z',
-        async downloadAndInstall(onEvent) {
+        async download(onEvent) {
+          installOrder.push('download');
           onEvent?.({ event: 'Started', data: { contentLength: 10 } });
           onEvent?.({ event: 'Progress', data: { chunkLength: 4 } });
           onEvent?.({ event: 'Progress', data: { chunkLength: 6 } });
           onEvent?.({ event: 'Finished' });
         },
+        async install() {
+          installOrder.push('install');
+        },
         async close() {
           closed = true;
         },
       }),
+      prepareForInstall: async () => {
+        installOrder.push('prepare');
+        return true;
+      },
       relaunch: async () => {
+        installOrder.push('relaunch');
         relaunched = true;
       },
     };
@@ -66,6 +77,12 @@ describe('Tauri updater flow', () => {
       bindings
     );
     expect(progress).toEqual([0, 40, 100, 100]);
+    expect(installOrder).toEqual([
+      'download',
+      'prepare',
+      'install',
+      'relaunch',
+    ]);
     expect(relaunched).toBe(true);
 
     await clearPendingAppUpdate();
@@ -80,6 +97,7 @@ describe('Tauri updater flow', () => {
         check: async () => {
           throw new Error('offline');
         },
+        prepareForInstall: async () => false,
         relaunch: async () => {},
       },
       error => errors.push(error)
@@ -101,6 +119,7 @@ describe('Tauri updater flow', () => {
         await waitForCheck;
         return null;
       },
+      prepareForInstall: async () => false,
       relaunch: async () => {},
     };
 
@@ -113,5 +132,59 @@ describe('Tauri updater flow', () => {
       { status: 'up-to-date' },
     ]);
     expect(checks).toBe(1);
+  });
+
+  test('relaunches the current build if Windows installer startup fails after shutdown', async () => {
+    let relaunched = false;
+    const bindings: AppUpdaterBindings = {
+      isConfigured: async () => true,
+      check: async () => ({
+        version: '0.7.2',
+        async download() {},
+        async install() {
+          throw new Error('installer failed');
+        },
+        async close() {},
+      }),
+      prepareForInstall: async () => true,
+      relaunch: async () => {
+        relaunched = true;
+      },
+    };
+
+    await checkForAppUpdate(bindings);
+    await expect(installPendingAppUpdate(() => {}, bindings)).rejects.toThrow(
+      'installer failed'
+    );
+    expect(relaunched).toBe(true);
+  });
+
+  test('relaunches the current build if Windows sidecar preparation rejects', async () => {
+    let installed = false;
+    let relaunched = false;
+    const bindings: AppUpdaterBindings = {
+      isConfigured: async () => true,
+      check: async () => ({
+        version: '0.7.2',
+        async download() {},
+        async install() {
+          installed = true;
+        },
+        async close() {},
+      }),
+      prepareForInstall: async () => {
+        throw new Error('sidecar termination was not confirmed');
+      },
+      relaunch: async () => {
+        relaunched = true;
+      },
+    };
+
+    await checkForAppUpdate(bindings);
+    await expect(installPendingAppUpdate(() => {}, bindings)).rejects.toThrow(
+      'sidecar termination was not confirmed'
+    );
+    expect(installed).toBe(false);
+    expect(relaunched).toBe(true);
   });
 });

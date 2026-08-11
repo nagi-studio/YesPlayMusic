@@ -1,9 +1,42 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import type { AxiosRequestConfig } from 'axios';
 import type { Decoder } from '../src/api/decoders';
 
 let musicQuality: number | 'flac' = 'flac';
 const requests: AxiosRequestConfig[] = [];
+
+interface AudioQualityCase {
+  setting: number | 'flac';
+  wire: string;
+}
+
+const qualityCases = (() => {
+  const input: unknown = JSON.parse(
+    readFileSync(
+      new URL(
+        '../src-tauri/sidecar/src/fixtures/audio-quality-cases.json',
+        import.meta.url
+      ),
+      'utf8'
+    )
+  );
+  if (
+    !Array.isArray(input) ||
+    !input.every(
+      (entry): entry is AudioQualityCase =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        'setting' in entry &&
+        (typeof entry.setting === 'number' || entry.setting === 'flac') &&
+        'wire' in entry &&
+        typeof entry.wire === 'string'
+    )
+  ) {
+    throw new Error('音质 fixture 格式无效');
+  }
+  return input;
+})();
 
 const request = mock(
   async <TResponse>(
@@ -45,29 +78,25 @@ describe('音源质量契约', () => {
     request.mockClear();
   });
 
-  test('无损设置请求原版 Electron 使用的 350000 档位', async () => {
-    const response = await getMP3(42);
+  test('五档设置都产生兼容的 wire bitrate', async () => {
+    for (const qualityCase of qualityCases) {
+      musicQuality = qualityCase.setting;
+      requests.length = 0;
 
-    expect(requests).toEqual([
-      {
+      const response = await getMP3('track-id');
+
+      expect(requests[0]).toMatchObject({
         url: '/song/url',
         method: 'get',
-        params: { id: 42, br: '350000' },
-      },
-    ]);
-    expect(response.data[0]).toMatchObject({
-      id: 42,
-      url: 'https://music.example/lossless.flac',
-      type: 'flac',
-      br: 999000,
-    });
-  });
-
-  test('有损音质档位保持数值不变', async () => {
-    musicQuality = 320000;
-
-    await getMP3('track-id');
-
-    expect(requests[0]?.params).toEqual({ id: 'track-id', br: 320000 });
+        params: { id: 'track-id' },
+      });
+      expect(String(requests[0]?.params?.['br'])).toBe(qualityCase.wire);
+      expect(response.data[0]).toMatchObject({
+        id: 42,
+        url: 'https://music.example/lossless.flac',
+        type: 'flac',
+        br: 999000,
+      });
+    }
   });
 });

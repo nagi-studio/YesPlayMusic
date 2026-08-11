@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { readdirSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseProcessTable } from './lib/processMetrics.mjs';
@@ -10,6 +11,7 @@ const projectRoot = path.resolve(
 );
 const baseUrl = 'http://127.0.0.1:28232';
 const legacyPlayerUrl = 'http://127.0.0.1:27232/player';
+const sidecarPorts = [12_754, 27_232, 27_233, 28_232];
 const sleep = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 const includeWebview = !process.argv.includes('--core-only');
@@ -31,7 +33,9 @@ export function resolveTauriSmokeExecutable({
   platform = process.platform,
   arch = process.arch,
   root = projectRoot,
+  executablePath,
 } = {}) {
+  if (executablePath) return realpathSync(executablePath);
   if (platform === 'darwin' && arch === 'arm64') {
     return path.join(
       root,
@@ -54,6 +58,10 @@ export function resolveTauriSmokeExecutable({
     );
   }
   throw new Error(`Unsupported Tauri smoke host: ${platform}-${arch}`);
+}
+
+export function tauriSmokeExitTimeoutMs(includeWebview) {
+  return includeWebview ? 35_000 : 15_000;
 }
 
 function readProcessTable() {
@@ -85,7 +93,9 @@ async function waitForReady(timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/api/login/status`);
+      const response = await fetch(`${baseUrl}/api/login/status`, {
+        signal: AbortSignal.timeout(1_000),
+      });
       if (response.ok) return response.json();
     } catch (_) {
       // Connection failures are expected while the sidecar loads its modules.
@@ -95,28 +105,42 @@ async function waitForReady(timeoutMs = 30_000) {
   throw new Error(`Tauri sidecar 未在 ${timeoutMs / 1_000} 秒内进入 ready`);
 }
 
-async function assertUrlStopped(url, label) {
+function portAcceptsConnections(port, timeoutMs = 500) {
+  return new Promise(resolve => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const finish = acceptsConnections => {
+      socket.destroy();
+      resolve(acceptsConnections);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function assertPortStopped(port) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await fetch(url);
-    } catch (_) {
-      return;
-    }
+    if (!(await portAcceptsConnections(port))) return;
     await sleep(100);
   }
-  throw new Error(`Tauri 退出后 ${label} 仍可访问`);
+  throw new Error(`Tauri 退出后 127.0.0.1:${port} 仍有 listener`);
 }
 
 async function main() {
   if (includeWebview && process.platform !== 'darwin') {
     throw new Error('隐藏 WebView smoke 目前只支持 macOS');
   }
-  const executable = resolveTauriSmokeExecutable();
+  const executable = resolveTauriSmokeExecutable({
+    executablePath: process.env.YPM_TAURI_SMOKE_EXECUTABLE,
+  });
   const beforePids = includeWebview
     ? new Set(readProcessTable().map(process => process.pid))
     : new Set();
   let resolveWebviewReady;
   let observedOutput = '';
+  const startedAt = performance.now();
+  let webviewReadyAt = null;
   const webviewReady = new Promise(resolve => {
     resolveWebviewReady = resolve;
   });
@@ -139,6 +163,7 @@ async function main() {
     text => {
       observedOutput = `${observedOutput}${text}`.slice(-4_096);
       if (observedOutput.includes('[tauri] webview-ready:')) {
+        webviewReadyAt ??= performance.now();
         resolveWebviewReady();
       }
     }
@@ -146,10 +171,17 @@ async function main() {
   const stderrTask = forwardOutput(tauriProcess.stderr, process.stderr);
 
   const loginStatus = await waitForReady();
-  const home = await fetch(baseUrl).then(response => response.text());
+  const apiReadyAt = performance.now();
+  const home = await fetch(baseUrl, {
+    signal: AbortSignal.timeout(5_000),
+  }).then(response => response.text());
   const [playerInfo, playerInfoAlias] = await Promise.all([
-    fetch(legacyPlayerUrl).then(response => response.json()),
-    fetch(`${baseUrl}/player`).then(response => response.json()),
+    fetch(legacyPlayerUrl, { signal: AbortSignal.timeout(5_000) }).then(
+      response => response.json()
+    ),
+    fetch(`${baseUrl}/player`, {
+      signal: AbortSignal.timeout(5_000),
+    }).then(response => response.json()),
   ]);
   if (!home.includes('<div id="app"></div>')) {
     throw new Error('Tauri 首页没有返回 Vue 挂载点');
@@ -168,6 +200,7 @@ async function main() {
   if (JSON.stringify(playerInfoAlias) !== JSON.stringify(playerInfo)) {
     throw new Error('28232 /player 别名与 27232 兼容 API 不一致');
   }
+  const rendererReadyAt = performance.now();
 
   let webkitPids = [];
   if (includeWebview) {
@@ -223,7 +256,7 @@ async function main() {
 
   const exitCode = await Promise.race([
     tauriProcess.exited,
-    sleep(15_000).then(() => null),
+    sleep(tauriSmokeExitTimeoutMs(includeWebview)).then(() => null),
   ]);
   if (exitCode === null) {
     tauriProcess.kill();
@@ -233,11 +266,30 @@ async function main() {
   activeTauriProcess = null;
 
   await Promise.all([stdoutTask, stderrTask]);
-  await Promise.all([
-    assertUrlStopped(baseUrl, '28232 UI 端口'),
-    assertUrlStopped(legacyPlayerUrl, '27232 兼容 API 端口'),
-  ]);
+  if (!observedOutput.includes('[sidecar] exited: Some(0)')) {
+    throw new Error('Tauri 退出时 Rust Sidecar 未完成 stdin 优雅关闭');
+  }
+  await Promise.all(sidecarPorts.map(assertPortStopped));
   if (metricsOutput) console.log(metricsOutput.trim());
+  console.log(
+    JSON.stringify(
+      {
+        label: includeWebview
+          ? 'tauri-installed-webview-readiness'
+          : 'tauri-installed-core-readiness',
+        milliseconds: {
+          apiReady: Math.round(apiReadyAt - startedAt),
+          rendererReady: Math.round(rendererReadyAt - startedAt),
+          ...(webviewReadyAt === null
+            ? {}
+            : { webviewReady: Math.round(webviewReadyAt - startedAt) }),
+          cleanExit: Math.round(performance.now() - startedAt),
+        },
+      },
+      null,
+      2
+    )
+  );
   console.log(
     `[tauri-smoke] UI、API、${includeWebview ? '隐藏 WebView、' : ''}${
       supportsProcessMetrics ? '内存采样和' : ''

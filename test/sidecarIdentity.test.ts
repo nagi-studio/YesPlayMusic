@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { PassThrough } from 'node:stream';
-import { readFileSync } from 'node:fs';
 import express from 'express';
 import type { Request, Response } from 'express';
 import {
@@ -65,36 +64,6 @@ describe('sidecar 身份握手', () => {
     expect(() => installSidecarHealthRoute(app, 'predictable')).toThrow();
   });
 
-  test('Rust 启动器与 JavaScript sidecar 锁定同一份握手正文', () => {
-    const rustSource = readFileSync(
-      new URL('../src-tauri/src/main.rs', import.meta.url),
-      'utf8'
-    );
-    expect(rustSource).toContain(
-      `const SIDECAR_HEALTH_BODY: &str = r#"${SIDECAR_HEALTH_BODY}"#;`
-    );
-    expect(rustSource).toContain('child.write(');
-    expect(rustSource).toContain(
-      'response_has_sidecar_identity(response: &str, expected_token: &str)'
-    );
-    expect(rustSource).toContain('"--parent-pid".to_string()');
-  });
-
-  test('API-only 健康检查晚于可选代理 relay 启动', () => {
-    const sidecarSource = readFileSync(
-      new URL('../src/sidecar.ts', import.meta.url),
-      'utf8'
-    );
-    const relayReady = sidecarSource.indexOf(
-      'proxyRelay = await startWebviewProxyRelay'
-    );
-    const healthReady = sidecarSource.indexOf(
-      'if (config.apiOnly) installSidecarHealthRoute(apiApp, healthToken);'
-    );
-    expect(relayReady).toBeGreaterThan(-1);
-    expect(healthReady).toBeGreaterThan(relayReady);
-  });
-
   test('父进程管道关闭后只触发一次 Sidecar 自清理', async () => {
     const input = new PassThrough();
     input.write(`${'a'.repeat(64)}\n`);
@@ -109,14 +78,6 @@ describe('sidecar 身份握手', () => {
     stopMonitoring();
 
     expect(disconnects).toBe(1);
-  });
-
-  test('Sidecar 启动后始终监视父进程管道', () => {
-    const sidecarSource = readFileSync(
-      new URL('../src/sidecar.ts', import.meta.url),
-      'utf8'
-    );
-    expect(sidecarSource).toContain('monitorSidecarParent(input');
   });
 
   test('管道 EOF 失效时通过父 PID 自清理', async () => {

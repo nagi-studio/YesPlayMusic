@@ -346,7 +346,7 @@ export function uploadSong(
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      timeout: 200000,
+      timeout: 400000,
     },
     decodeUploadResponse
   );

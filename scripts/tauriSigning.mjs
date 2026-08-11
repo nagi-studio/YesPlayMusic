@@ -39,12 +39,7 @@ export function createLocalSigningSteps(
 
   return [
     {
-      label: '清除 Bun sidecar 的旧签名槽',
-      args: ['--remove-signature', sidecar],
-      allowFailure: true,
-    },
-    {
-      label: '签名 Bun sidecar',
+      label: '签名 Rust Sidecar',
       args: signingArgs(entitlements, sidecar),
     },
     {
@@ -69,7 +64,7 @@ export function signLocalTauriBundle(
   for (const step of createLocalSigningSteps(appPath)) {
     console.log(`[tauri-sign] ${step.label}`);
     const result = run(step.args);
-    if (result.exitCode !== 0 && !step.allowFailure) {
+    if (result.exitCode !== 0) {
       const error = new TextDecoder().decode(result.stderr || '').trim();
       throw new Error(`${step.label}失败${error ? `：${error}` : ''}`);
     }

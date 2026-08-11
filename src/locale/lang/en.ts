@@ -9,9 +9,8 @@ export default {
     library: 'Library',
     search: 'Search',
     github: 'GitHub Repo',
-  },
-  footer: {
-    settings: 'Settings',
+    restoreCompactPlayer: 'Back to player bar',
+    restoreCompactPlayerTitle: 'Back to player bar ({shortcut})',
   },
   home: {
     recommendPlaylist: 'Recommended Playlists',
@@ -24,7 +23,6 @@ export default {
     sLibrary: "'s Library",
     likedSongs: 'Liked Songs',
     sLikedSongs: "'s Liked Songs",
-    playlists: 'Playlists',
     albums: 'Albums',
     artists: 'Artists',
     mvs: 'MVs',
@@ -39,6 +37,7 @@ export default {
     userProfileMenu: {
       settings: 'Settings',
       logout: 'Logout',
+      logoutConfirm: 'Are you sure you want to log out?',
     },
   },
   explore: {
@@ -66,7 +65,6 @@ export default {
     albumDesc: 'Album Description',
   },
   playlist: {
-    playlist: 'Playlists',
     updatedAt: 'Updated at',
     search: 'Search in playlist',
   },
@@ -116,9 +114,6 @@ export default {
     translationLyric: 'lyric (trans)',
     PronunciationLyric: 'lyric (pronounce)',
   },
-  modal: {
-    close: 'Close',
-  },
   search: {
     artist: 'Artists',
     album: 'Albums',
@@ -129,7 +124,6 @@ export default {
     searchFor: 'Search for',
   },
   settings: {
-    settings: 'Settings',
     logout: 'LOGOUT',
     language: 'Languages',
     lyric: 'Lyric',
@@ -182,6 +176,8 @@ export default {
       light: 'Light',
       dark: 'Dark',
     },
+    vinylVip: 'Vinyl VIP',
+    cache: 'Cache',
     automaticallyCacheSongs: 'Automatically cache songs',
     clearSongsCache: 'Clear Songs Cache',
     cacheCount: 'Cached {song} songs ({size})',
@@ -217,6 +213,7 @@ export default {
       text: 'Show Lyrics Background',
       off: 'Off',
       on: 'On',
+      blur: 'Blurred cover',
       dynamic: 'Dynamic (High GPU usage)',
     },
     closeAppOption: {
@@ -234,6 +231,11 @@ export default {
       enable: 'Enable',
       audioSource: {
         title: 'Audio Sources',
+        desc1: 'For the exact source codes, ',
+        desc2: 'check the UNM documentation here.',
+        desc3: 'Separate multiple sources with a comma.',
+        desc4: 'Leave empty to use the UNM built-in default.',
+        placeholder: 'e.g. bilibili, kuwo',
       },
       enableFlac: {
         title: 'Enable FLAC Sources',
@@ -258,6 +260,39 @@ export default {
         desc2: 'Leave empty to pick up the default value',
       },
     },
+    lastfm: {
+      connected: 'Connected to Last.fm ({name})',
+      connect: 'Connect to Last.fm',
+      disconnect: 'Disconnect',
+      authorize: 'Authorize',
+    },
+    proxy: {
+      title: 'Proxy',
+      protocol: 'Proxy protocol',
+      off: 'No proxy',
+      http: 'HTTP proxy',
+      https: 'HTTPS proxy',
+      server: 'Server address',
+      port: 'Port',
+      update: 'Update proxy',
+    },
+    realIPPlaceholder: 'IP address',
+    shortcut: {
+      title: 'Shortcuts',
+      function: 'Function',
+      shortcut: 'Shortcut',
+      globalShortcut: 'Global shortcut',
+      restoreDefault: 'Restore default shortcuts',
+      actions: {
+        play: 'Play/Pause',
+        next: 'Next track',
+        previous: 'Previous track',
+        increaseVolume: 'Increase volume',
+        decreaseVolume: 'Decrease volume',
+        like: 'Like track',
+        minimize: 'Hide/Show player',
+      },
+    },
   },
   contextMenu: {
     play: 'Play',
@@ -280,11 +315,17 @@ export default {
   toast: {
     savedToPlaylist: 'Saved to playlist',
     removedFromPlaylist: 'Removed from playlist',
-    savedToMyLikedSongs: 'Saved to my Liked Songs',
-    removedFromMyLikedSongs: 'Removed from my Liked Songs',
     copied: 'Copied',
     copyFailed: 'Copy failed: ',
     needToLogin: 'Need to log into netease account',
+    lastfmAuthFailed: 'Last.fm authorization failed',
+    lastfmWindowFailed: 'Could not open the Last.fm authorization window',
+    proxyIncomplete: 'The proxy configuration is incomplete',
+    proxyUpdated: 'Proxy settings updated, restarting',
+    proxyUpdateFailed: 'Could not apply the proxy settings',
+    proxyDisabled: 'Proxy disabled, restarting',
+    proxyDisableFailed: 'Could not disable the proxy',
+    shortcutsSaved: 'Shortcuts saved',
     legacyMigrationComplete:
       'Imported your Electron account and playback state',
     legacyMigrationPartial:

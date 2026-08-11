@@ -22,13 +22,15 @@ interface UpdateCandidate {
   version: string;
   body?: string;
   date?: string;
-  downloadAndInstall(onEvent?: (event: DownloadEvent) => void): Promise<void>;
+  download(onEvent?: (event: DownloadEvent) => void): Promise<void>;
+  install(): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface AppUpdaterBindings {
   isConfigured(): Promise<boolean>;
   check(): Promise<UpdateCandidate | null>;
+  prepareForInstall(): Promise<boolean>;
   relaunch(): Promise<void>;
 }
 
@@ -43,6 +45,7 @@ async function defaultBindings(): Promise<AppUpdaterBindings> {
   return {
     isConfigured: () => invoke<boolean>('updater_configured'),
     check,
+    prepareForInstall: () => invoke<boolean>('prepare_for_update'),
     relaunch,
   };
 }
@@ -110,7 +113,7 @@ export async function installPendingAppUpdate(
   let downloadedBytes = 0;
   let totalBytes: number | null = null;
 
-  await update.downloadAndInstall(event => {
+  await update.download(event => {
     if (event.event === 'Started') {
       totalBytes = event.data.contentLength ?? null;
       downloadedBytes = 0;
@@ -126,6 +129,19 @@ export async function installPendingAppUpdate(
           : null,
     });
   });
+
+  let prepareCompleted = false;
+  let sidecarStopped = false;
+  try {
+    sidecarStopped = await runtime.prepareForInstall();
+    prepareCompleted = true;
+    await update.install();
+  } catch (error) {
+    // A rejected preparation may mean Windows stopped the Sidecar but could not
+    // confirm it. Relaunch in that uncertain state as well as after install errors.
+    if (!prepareCompleted || sidecarStopped) await runtime.relaunch();
+    throw error;
+  }
   await runtime.relaunch();
 }
 

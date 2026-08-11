@@ -1,11 +1,9 @@
 export interface SigningStep {
   label: string;
   args: string[];
-  allowFailure?: boolean;
 }
 
 export type LocalSigningSteps = [
-  SigningStep & { allowFailure: true },
   SigningStep,
   SigningStep,
   SigningStep,

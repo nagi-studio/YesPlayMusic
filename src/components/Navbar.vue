@@ -17,11 +17,11 @@
         <button-icon
           v-if="compactWindowExpanded"
           class="restore-compact-window"
-          title="回到播放栏 (Esc)"
+          :title="$t('nav.restoreCompactPlayerTitle', { shortcut: 'Esc' })"
           @click="$emit('restore-compact-window')"
         >
           <svg-icon icon-class="arrow-down" />
-          <span>回到播放栏</span>
+          <span>{{ $t('nav.restoreCompactPlayer') }}</span>
           <kbd>Esc</kbd>
         </button-icon>
       </div>
@@ -129,7 +129,6 @@ export default defineComponent({
   data() {
     return {
       inputFocus: false,
-      langs: ['zh-CN', 'zh-TW', 'en', 'tr'],
       keywords: '',
     };
   },
@@ -193,7 +192,9 @@ export default defineComponent({
       ).openMenu(e);
     },
     logout() {
-      if (!confirm('确定要退出登录吗？')) return;
+      if (!confirm(String(this.$t('library.userProfileMenu.logoutConfirm')))) {
+        return;
+      }
       doLogout();
       this.$router.push({ name: 'home' });
     },

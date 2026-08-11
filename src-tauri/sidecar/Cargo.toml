@@ -1,0 +1,48 @@
+[package]
+name = "yesplaymusic-sidecar"
+version = "0.8.0-canary.1"
+description = "YesPlayMusic local HTTP backend"
+edition = "2021"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "=1.0.104"
+async-trait = "=0.1.92"
+axum = { version = "=0.8.6", features = ["macros", "multipart"] }
+base64 = "=0.22.1"
+bytes = "=1.12.1"
+futures-util = "=0.3.33"
+getrandom = "=0.3.3"
+http-body-util = "=0.1.4"
+lofty = { version = "=0.22.4", default-features = false }
+md-5 = "=0.10.6"
+mime_guess = "=2.0.5"
+ncm-api-rs = "=0.1.0"
+reqwest = { version = "=0.12.23", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rustls = { version = "=0.23.31", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+rustls-native-certs = "=0.8.4"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+serde_urlencoded = "=0.7.1"
+subtle = "=2.6.1"
+tempfile = "=3.27.0"
+thiserror = "=2.0.19"
+tokio = { version = "=1.53.1", features = ["full"] }
+tokio-rustls = { version = "=0.26.2", default-features = false, features = ["logging", "ring", "tls12"] }
+tokio-util = { version = "=0.7.19", features = ["io", "rt"] }
+tower = { version = "=0.5.3", features = ["util"] }
+tower-http = { version = "=0.6.11", features = ["fs", "set-header"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.20", features = ["env-filter"] }
+unm_api_utils = "=0.4.0"
+unm_engine = "=0.4.0"
+unm_types = "=0.4.0"
+url = "=2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.60.2", features = ["Win32_Foundation", "Win32_System_Threading"] }

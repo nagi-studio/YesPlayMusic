@@ -1,6 +1,6 @@
 {
   "name": "yesplaymusic",
-  "version": "0.7.0",
+  "version": "0.8.0-canary.1",
   "private": true,
   "description": "A third party music player for Netease Music",
   "author": "qier222<qier222@outlook.com>",
@@ -12,7 +12,7 @@
     "typecheck:sidecar": "tsc --noEmit -p tsconfig.sidecar.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "dev:tauri:renderer": "IS_TAURI=true vite",
-    "build:tauri:renderer": "IS_TAURI=true vite build",
+    "build:tauri:renderer": "IS_TAURI=true vite build && bun scripts/build-app-compliance.mjs",
     "tauri": "tauri",
     "dev:tauri": "tauri dev",
     "build:tauri": "bun scripts/build-tauri-host.mjs",
@@ -31,7 +31,10 @@
     "verify:tauri:version": "bun scripts/verify-tauri-version.mjs",
     "smoke:tauri": "bun scripts/smoke-tauri-local.mjs",
     "smoke:tauri:core": "bun scripts/smoke-tauri-local.mjs --core-only",
-    "build:sidecar": "bun scripts/build-sidecar.mjs",
+    "smoke:tauri:supervisor": "bun scripts/smoke-tauri-supervisor.mjs",
+    "build:sidecar": "bun scripts/build-rust-sidecar.mjs --release && bun scripts/build-sidecar-compliance.mjs",
+    "build:sidecar:dev": "bun scripts/build-rust-sidecar.mjs --debug && bun scripts/build-sidecar-compliance.mjs --notices-only",
+    "build:sidecar:bun-reference": "bun scripts/build-sidecar.mjs",
     "test": "bun test",
     "prettier": "npx prettier --write ./src",
     "netease_api:run": "npx @neteaseapireborn/api"

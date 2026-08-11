@@ -26,19 +26,27 @@ macOS Tauri 重构版，不再跟随上游发版。原项目的界面和主要�
 ## Tauri 重构版改了什么
 
 **v0.6.0 是一次完整的 Tauri 重构。** 渲染层升级到 Vue 3 和 Vite 7，桌面外壳改为
-Tauri 2。应用不再捆绑 Chromium，窗口、菜单栏、媒体状态和本地服务由 Rust 主进程接管。
+Tauri 2。应用不再捆绑 Chromium。窗口、菜单栏、媒体状态和 Sidecar 生命周期由 Rust
+主进程负责；独立的 Rust Sidecar 托管页面，并提供网易云 API、同源 `/api` 代理和 UNM。
+当前桌面包不再携带 Bun runtime。
 
-当前代码已迁移到 TypeScript 6.0 严格模式与 Pinia 4。所有 Vue 组件、API、播放器、
-Sidecar 和测试都参加类型检查，外部响应在运行时验证后才进入业务层。Electron 运行时已删除，
+当前代码已迁移到 TypeScript 6.0 严格模式与 Pinia 4。Vue 组件、API、播放器和前端测试
+参加 TypeScript 类型检查；Rust 主进程与 Rust Sidecar 由 Cargo 测试和 Clippy 验证。
+外部响应在运行时验证后才进入业务层。Electron 运行时已删除，
 原有桌面能力的 Tauri 对应实现和验收状态见
 [Electron → Tauri 功能迁移表](docs/feature-migration.md)。
 
-包体积是目前可以直接复现的收益：迁移前 Electron 版 `.app` 为 381.5 MiB，当前
-Tauri 版约为 83 MiB，减少约 78%。内存按完整进程树口径实测（含 WKWebView 各进程）：
-正常播放场景物理内存合计约 0.6 GiB（Apple Silicon / macOS 15 实测，随歌曲缓存与曲目
-时长浮动），其中 Rust 主进程与 Bun sidecar 的固定成本合计约 140 MiB。歌曲缓存存放在
-用户目录、随使用增长，不计入安装体积。测试口径和阶段性结果见
-[性能迁移基线](docs/performance-baseline.md)。
+Rust Sidecar 迁移后的 `0.7.1-canary.1` 本机验收包中，Apple Silicon `.app` 从本 fork
+v0.7.0 的 82.555 MiB 降到 22.582 MiB，减少 72.6%；DMG 为 11.846 MiB。作为外部历史
+参考，上游 qier222 v0.4.10 官方 arm64 DMG 为 88.773 MiB，挂载后的 `.app` 为
+211.934 MiB，当前分别减少 86.7% 和 89.3%。
+
+安装包实测的隐藏窗口完整进程树 CPU mean 为 0.57%，连续播放两个 5 分钟窗口的 Tauri
+主进程 CPU mean 为 1.26% 和 1.20%；Rust Sidecar 稳态 `phys_footprint` 为 8.97 至
+9.52 MiB，连续播放 10 分钟没有观察到 Sidecar 物理内存持续累积。相对历史 Bun Sidecar
+约 82 MB 的粗略记录，后端占用量级约低 88% 至 89%；这不是 matched run。完整进程树内存
+受 WebKit 和媒体缓存影响，尚无同场景 Bun 对照，因此不据此宣传整机内存降幅。逐样本
+证据、测量口径和限制见[性能迁移基线](docs/performance-baseline.md)。
 
 **迷你播放器。** 把窗口压矮（高度小于 340）就会自动变成一条紧凑的播放条，
 左边小封面配歌名歌手，中间是当前这句歌词，右边是播放控制。只把窗口拖窄不会触发播放条，
@@ -73,61 +81,60 @@ Tauri 版约为 83 MiB，减少约 78%。内存按完整进程树口径实测（
 
 ## 安装
 
-到 [Releases](https://github.com/nagi-studio/YesPlayMusic/releases) 下载 dmg。
-当前版本只提供 Apple Silicon（`arm64`）安装包，要求 macOS 14 或更高版本。
+到 [Releases](https://github.com/nagi-studio/YesPlayMusic/releases) 下载 DMG。
+macOS 正式支持包只提供 Apple Silicon（`arm64`）DMG，要求 macOS 14 或更高版本；
+同一 Release 还可能包含下面说明的 Windows 和 Linux 实验包。
+同一 Release 还会提供对应版本的
+`YesPlayMusic_<version>_sidecar-source.tar.gz`、SHA-256 与醒目的
+`SOURCE-OFFER` 指引；这是 Rust Sidecar 的完整对应源码和离线重链接包。转发或镜像 DMG
+时，请同时保留源码资产和源码下载指引。
 
-安装包没有 Developer ID 签名和 Apple 公证，首次打开时 macOS 会拦一道。放行方法二选一：
+DMG 内的 `.app` 带完整的 ad-hoc Hardened Runtime seal；DMG 本身未签名，也没有
+Developer ID 身份签名或 Apple 公证。上游公开版同样没有 Developer ID 和公证，首次打开时
+macOS 会拦一道。放行方法二选一：
 
 - 打开「系统设置 → 隐私与安全性」，往下翻到被拦截的提示，点「仍要打开」
 - 或者在终端跑一句：`xattr -dr com.apple.quarantine /Applications/YesPlayMusic.app`
 
 自己从源码构建的话没有这个问题，本地产物不带隔离属性。
 
+从 tag 构建的包会在启动时静默检查更新，也可以在设置页手动检查、下载和安装。stable 只
+接收 stable 更新，canary 只接收 canary 更新；更新包使用 Tauri Minisign 验签，这与
+Apple Developer ID 无关。普通本地构建没有发布公钥，因此自动更新保持未配置状态。
+
 ## 自己构建
 
-需要 [bun](https://bun.sh)，Node 20 以上（Node 26 实测可用）。
+需要 [Bun 1.3.12](https://bun.sh)、Rust 1.89 以上，以及对应平台的 Tauri 系统依赖。
+只有运行仓库里的 `npx` 辅助命令时才另需 Node 20 以上。
 
 ```bash
-cp .env.example .env   # 必须，缺了它前端拿不到 API 地址，界面会全空
+cp .env.example .env   # 推荐：启用 Last.fm 等完整本地配置
 bun install
 bun run dev:tauri      # 开发模式
 bun run build:tauri    # 按当前系统构建 Tauri 应用
-bun run package:tauri:dmg  # 生成可分发的 DMG 和 SHA-256 校验文件
+bun run package:tauri:dmg  # 生成 DMG、完整 Sidecar 源码包、下载指引与 SHA-256
 ```
 
-`.env` 不进版本库，但 `.env.example` 里已经是一份可以直接用的完整配置，
-不需要自己去申请任何密钥。
+上面这套 Tauri 命令会固定使用同源 `/api`，不复制 `.env` 也能正常加载主界面和网易云 API。
+需要 Last.fm 等完整功能时，直接复制 `.env.example`；里面已经有可用配置，不需要另行申请
+密钥。`.env` 不进版本库。
 
-应用产物在
-`src-tauri/target/aarch64-apple-darwin/release/bundle/macos/YesPlayMusic.app`，
-DMG 和校验文件在 `dist_tauri/`。
+各平台 Tauri 产物在 `src-tauri/target/<target-triple>/release/bundle/`。macOS 的 DMG、
+完整 Sidecar 源码包、醒目的源码下载指引和各自的校验文件在 `dist_tauri/`；
+`package:tauri:dmg` 只用于 macOS。
 
-版本 tag 默认也走这套无 Developer ID 的发布流程。以后需要正式签名和公证时，
-在仓库中设置 `APPLE_SIGNING_ENABLED=true` 并补齐 Apple 凭据即可；对应 CI 步骤仍然保留。
+版本 tag 走这套无 Developer ID 的发布流程，这就是当前正式发布政策；Developer ID 和公证
+不是发布要求。仓库仍保留 `APPLE_SIGNING_ENABLED=true` 的可选 CI 能力，但默认不启用。
 
 开发细节和踩过的坑都记在 [CLAUDE.md](CLAUDE.md) 里。
 
-## 关于 Windows 和 Linux
+## Windows 和 Linux
 
-Windows x64 和 Ubuntu x64 使用与 macOS 相同的 Tauri 外壳，不再发布旧 Electron 外壳。
-每次向仓库自己的分支 push 后，可以在 Actions 的 `Desktop builds` 运行记录底部下载：
-
-- Windows：未签名的 NSIS `.exe` 安装包
-- Ubuntu：AppImage 和 `.deb`
-
-这些实验包暂时不自动加入 GitHub Release。Windows 未签名安装包可能触发 SmartScreen；
-不要为此全局关闭杀毒软件或 SmartScreen。AppImage 可以直接运行，`.deb` 适合 Ubuntu / Debian。
-
-在对应系统本机从源码构建：
-
-```bash
-bun run build:tauri:windows  # Windows x64，输出 NSIS setup.exe
-bun run build:tauri:linux    # Ubuntu x64，输出 AppImage 和 deb
-```
-
-Tauri 会同时编译目标平台的 Bun Sidecar。Sidecar 是随应用安装的本地后端，只监听
-`127.0.0.1`，负责网易云 API、同源登录代理和 UNM；用户电脑不需要另装 Bun。
-Windows / Linux 没有 macOS 的 `afconvert`，精确 FLAC 拖动会自动使用播放器已有的回退路径。
+只有 macOS 是正式支持平台。Windows x64（未签名 NSIS `.exe`）和 Ubuntu x64（AppImage 和
+`.deb`）是同一套 Tauri 外壳的实验构建，未做实装验收：`master` push 只产生 Actions artifact，
+推 `v*` tag 时会和 macOS 包一起进入同一个草稿 Release（未签名安装包会触发 SmartScreen）。
+本机构建用 `bun run build:tauri:windows` / `bun run build:tauri:linux`。这两个平台没有
+`afconvert`，精确 FLAC 拖动走播放器已有的回退路径。
 
 ## 致谢
 
@@ -158,9 +165,14 @@ Windows / Linux 没有 macOS 的 `afconvert`，精确 FLAC 拖动会自动使用
 
 ## 开源许可
 
-沿用上游的 [MIT license](https://opensource.org/licenses/MIT)。
+本项目自有的前端与 Tauri 主程序代码沿用上游的 [MIT license](LICENSE)。Rust Sidecar
+静态链接了 `GPL-3.0-only` 依赖，因此 Sidecar 组合程序及其源码按
+[GPL-3.0-only](legal/GPL-3.0.txt) 分发。每个包含 Rust Sidecar 的新 Release 会在同一
+下载页提供完整对应源码、第三方 notice、校验和与离线重链接说明。
 
-仅供个人学习研究使用，禁止用于商业及非法用途。音乐版权归网易云音乐及各版权方所有。
+MIT 与 GPL-3.0 均允许商业使用，本项目不附加“仅限个人或非商业用途”的代码许可限制。
+使用者仍须自行遵守网易云音乐服务条款、适用法律和音乐版权要求；本项目不提供音乐内容，
+也不授予任何音乐作品的商业使用权。
 
 TAURI is a trademark of The Tauri Programme within the Commons Conservancy. README 中使用的
 Tauri 标识来自官方 Logopack，仅作技术栈说明。

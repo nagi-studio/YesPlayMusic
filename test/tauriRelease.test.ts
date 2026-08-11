@@ -1,8 +1,13 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { tauriDmgName } from '../scripts/package-tauri-dmg.mjs';
+import {
+  assertTauriAppSize,
+  RUST_SIDECAR_APP_SIZE_LIMIT_BYTES,
+  tauriDmgName,
+} from '../scripts/package-tauri-dmg.mjs';
 import { verifyAppleReleaseEnvironment } from '../scripts/verify-apple-release-env.mjs';
 import {
+  readUniqueCargoLockPackageVersion,
   validateTauriVersions,
   verifyTauriVersions,
 } from '../scripts/verify-tauri-version.mjs';
@@ -12,10 +17,6 @@ const workflow = readFileSync(
   'utf8'
 );
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
-const linuxdeployLdd = readFileSync(
-  new URL('../scripts/ci/ldd', import.meta.url),
-  'utf8'
-);
 const tauriSmoke = readFileSync(
   new URL('../scripts/smoke-tauri-local.mjs', import.meta.url),
   'utf8'
@@ -27,7 +28,6 @@ const packageJson = JSON.parse(
 test('CI 官方 Actions 使用 Node.js 24 运行时版本', () => {
   for (const action of [
     'actions/checkout@v7',
-    'actions/cache@v6',
     'actions/upload-artifact@v7',
     'actions/download-artifact@v8',
   ]) {
@@ -48,11 +48,28 @@ test('macOS CI 保留无签名和签名两条发布路径', () => {
   expect(workflow).toContain('targets: aarch64-apple-darwin');
   expect(workflow).toContain('run: bun run build:tauri');
   expect(workflow).toContain('run: bun run package:tauri:dmg');
-  expect(workflow).toContain('run: shasum -a 256 -c ./*.sha256');
+  expect(workflow).toContain(
+    'name: Verify complete macOS distribution set and checksums'
+  );
+  expect(workflow).toContain('YesPlayMusic_${VERSION}_aarch64.dmg');
+  expect(workflow).toContain('YesPlayMusic_${VERSION}_sidecar-source.tar.gz');
+  expect(workflow).toContain('YesPlayMusic_${VERSION}_SOURCE-OFFER.md');
+  expect(workflow).toContain('shasum -a 256 -c ./*.sha256');
   expect(workflow).toContain('run: bun run verify:tauri:version');
   expect(workflow).toContain('path: dist_tauri/*');
+  expect(workflow).toContain('name: YesPlayMusic-macos-aarch64');
+  expect(workflow).toContain('files: release/**/*');
   expect(workflow).toContain('run: bun run build:tauri:release');
   expect(workflow).toContain('run: bun run collect:tauri:release-dmg');
+});
+
+test('Rust-only .app 体积门禁在 DMG 打包前失败', () => {
+  expect(assertTauriAppSize(RUST_SIDECAR_APP_SIZE_LIMIT_BYTES)).toBe(
+    RUST_SIDECAR_APP_SIZE_LIMIT_BYTES
+  );
+  expect(() =>
+    assertTauriAppSize(RUST_SIDECAR_APP_SIZE_LIMIT_BYTES + 1)
+  ).toThrow('54.1 MiB');
 });
 
 test('Windows CI 上传测试包并把 tag updater 交给 release job', () => {
@@ -65,12 +82,6 @@ test('Windows CI 上传测试包并把 tag updater 交给 release job', () => {
   expect(windowsJob).toContain('runs-on: windows-latest');
   expect(windowsJob).toContain('permissions:\n      contents: read');
   expect(windowsJob).toContain(
-    'key: bun-target-${{ runner.os }}-1.3.12-windows-x64-baseline'
-  );
-  expect(windowsJob).toContain(
-    'BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-target-cache'
-  );
-  expect(windowsJob).toContain(
     'bun install --frozen-lockfile --ignore-scripts'
   );
   expect(windowsJob).toContain('cache-on-failure: true');
@@ -78,6 +89,7 @@ test('Windows CI 上传测试包并把 tag updater 交给 release job', () => {
   expect(windowsJob).toContain(
     'yesplaymusic-sidecar-x86_64-pc-windows-msvc.exe'
   );
+  expect(windowsJob).toContain('--unm-smoke-test');
   expect(windowsJob).toContain("if: github.event_name != 'pull_request'");
   expect(windowsJob).toContain('Get-FileHash $_.FullName -Algorithm SHA256');
   expect(windowsJob).toContain('dist_tauri_windows/SHA256SUMS-windows-x64.txt');
@@ -88,6 +100,10 @@ test('Windows CI 上传测试包并把 tag updater 交给 release job', () => {
   );
   expect(windowsJob).toContain('Do not disable antivirus');
   expect(windowsJob).toContain('retention-days: 7');
+  expect(windowsJob).toContain(
+    'verify-packaged-app-compliance.mjs windows-x86_64'
+  );
+  expect(windowsJob).toContain('Get-Command 7z -ErrorAction Stop');
   expect(releaseJob).toContain('YesPlayMusic-windows-x64');
 });
 
@@ -103,33 +119,33 @@ test('Ubuntu CI 构建 AppImage、deb 并把 tag updater 交给 release job', ()
   expect(linuxJob).toContain('libwebkit2gtk-4.1-dev');
   expect(linuxJob).toContain('bun run build:tauri:linux');
   expect(linuxJob).toContain('cache-on-failure: true');
-  expect(linuxJob).toContain('PATH="$GITHUB_WORKSPACE/scripts/ci:$PATH"');
-  expect(linuxdeployLdd).toContain(
-    '$(basename "$target") == \'yesplaymusic-sidecar\''
-  );
-  expect(linuxdeployLdd).toContain('/usr/bin/ldd "$@"');
   expect(packageJson.scripts['build:tauri:linux']).toContain('--verbose');
   expect(packageJson.scripts['build:tauri:linux']).toContain(
     '--bundles deb,appimage'
   );
   expect(linuxJob).toContain(
-    'yesplaymusic-sidecar-x86_64-unknown-linux-gnu --unm-addon-smoke-test'
+    'yesplaymusic-sidecar-x86_64-unknown-linux-gnu --unm-smoke-test'
   );
-  expect(linuxJob).toContain('YPM_SIDECAR_SMOKE_CACHE="$(mktemp -d)"');
   expect(linuxJob).toContain('YPM_APPIMAGE_SMOKE_CACHE="$(mktemp -d)"');
   expect(linuxJob).toContain(
     'XDG_CACHE_HOME="$YPM_APPIMAGE_SMOKE_CACHE" dbus-run-session'
   );
   expect(linuxJob).toContain('dpkg-deb -x');
-  expect(linuxJob).toContain('YPM_DEB_SMOKE_CACHE="$(mktemp -d)"');
   expect(linuxJob).toContain(
-    'stat -c \'%a\' "$YPM_DEB_SMOKE_ROOT/usr/lib/yesplaymusic/sidecar.payload"'
+    'test ! -e "$YPM_DEB_SMOKE_ROOT/usr/lib/yesplaymusic/sidecar.payload"'
   );
   expect(linuxJob).toContain(
-    '"$YPM_DEB_SMOKE_ROOT/usr/bin/yesplaymusic-sidecar" --unm-addon-smoke-test'
+    '"$YPM_DEB_SMOKE_ROOT/usr/bin/yesplaymusic-sidecar" --unm-smoke-test'
   );
   expect(linuxJob).toContain('bundle/appimage/*.AppImage');
   expect(linuxJob).toContain('bundle/deb/*.deb');
+  expect(linuxJob).toContain('squashfs-tools');
+  expect(linuxJob).toContain(
+    'verify-packaged-app-compliance.mjs linux-x86_64-appimage'
+  );
+  expect(linuxJob).toContain(
+    'verify-packaged-app-compliance.mjs linux-x86_64-deb'
+  );
   expect(linuxJob).toContain('sha256sum -c SHA256SUMS-linux-x64.txt');
   expect(releaseJob).toContain('YesPlayMusic-linux-x64');
 });
@@ -191,13 +207,17 @@ test('三平台干净 runner 在 Rust 测试前先生成 Tauri 资源', () => {
 
   for (const [start, end] of jobBoundaries) {
     const job = workflow.slice(workflow.indexOf(start), workflow.indexOf(end));
+    const sidecarTestIndex = job.indexOf(
+      'cargo test --locked --manifest-path src-tauri/sidecar/Cargo.toml'
+    );
     const rendererIndex = job.indexOf('bun run build:renderer');
     const sidecarIndex = job.indexOf('bun run build:sidecar');
     const rustTestIndex = job.indexOf(
       'run: cargo test --locked --manifest-path src-tauri/Cargo.toml'
     );
 
-    expect(rendererIndex).toBeGreaterThan(-1);
+    expect(sidecarTestIndex).toBeGreaterThan(-1);
+    expect(rendererIndex).toBeGreaterThan(sidecarTestIndex);
     expect(sidecarIndex).toBeGreaterThan(rendererIndex);
     expect(rustTestIndex).toBeGreaterThan(sidecarIndex);
   }
@@ -249,12 +269,15 @@ test('缺少 Apple 发版密钥时在构建前立即失败', () => {
   ).toBe(true);
 });
 
-test('tag 和三个应用版本字段必须完全一致', () => {
+test('tag 和所有应用版本字段必须完全一致', () => {
   expect(
     validateTauriVersions({
       packageVersion: '0.6.0',
       tauriVersion: '0.6.0',
       cargoVersion: '0.6.0',
+      sidecarVersion: '0.6.0',
+      lockCargoVersion: '0.6.0',
+      lockSidecarVersion: '0.6.0',
       tag: 'v0.6.0',
     })
   ).toBe('0.6.0');
@@ -263,20 +286,76 @@ test('tag 和三个应用版本字段必须完全一致', () => {
       packageVersion: '0.6.0',
       tauriVersion: '0.5.0',
       cargoVersion: '0.6.0',
+      sidecarVersion: '0.6.0',
+      lockCargoVersion: '0.6.0',
+      lockSidecarVersion: '0.6.0',
       tag: 'v0.6.0',
     })
   ).toThrow('版本号不一致');
+  expect(() =>
+    validateTauriVersions({
+      packageVersion: '0.6.0',
+      tauriVersion: '0.6.0',
+      cargoVersion: '0.6.0',
+      sidecarVersion: '0.5.0',
+      lockCargoVersion: '0.6.0',
+      lockSidecarVersion: '0.6.0',
+      tag: 'v0.6.0',
+    })
+  ).toThrow('sidecar=0.5.0');
+  expect(() =>
+    validateTauriVersions({
+      packageVersion: '0.6.0',
+      tauriVersion: '0.6.0',
+      cargoVersion: '0.6.0',
+      sidecarVersion: '0.6.0',
+      lockCargoVersion: '0.5.0',
+      lockSidecarVersion: '0.6.0',
+      tag: 'v0.6.0',
+    })
+  ).toThrow('lock-cargo=0.5.0');
+  expect(() =>
+    validateTauriVersions({
+      packageVersion: '0.6.0',
+      tauriVersion: '0.6.0',
+      cargoVersion: '0.6.0',
+      sidecarVersion: '0.6.0',
+      lockCargoVersion: '0.6.0',
+      lockSidecarVersion: '0.5.0',
+      tag: 'v0.6.0',
+    })
+  ).toThrow('lock-sidecar=0.5.0');
 });
 
-test('当前 Tauri 发布保持稳定版', async () => {
+test('Cargo.lock 中两个 workspace package 都必须唯一存在', () => {
+  for (const packageName of [
+    'yesplaymusic-tauri',
+    'yesplaymusic-sidecar',
+  ]) {
+    const block = `[[package]]\nname = "${packageName}"\nversion = "0.8.0-canary.1"\n`;
+    expect(readUniqueCargoLockPackageVersion(block, packageName)).toBe(
+      '0.8.0-canary.1'
+    );
+    expect(() => readUniqueCargoLockPackageVersion('', packageName)).toThrow(
+      `${packageName} 必须且只能出现一次`
+    );
+    expect(() =>
+      readUniqueCargoLockPackageVersion(`${block}\n${block}`, packageName)
+    ).toThrow(`${packageName} 必须且只能出现一次`);
+  }
+});
+
+test('当前 Tauri 发布版本保持一致', async () => {
   expect(await verifyTauriVersions()).toBe(packageJson.version);
-  expect(packageJson.version).not.toContain('-');
 });
 
-test('只有版本 tag 获得写权限并创建草稿 release', () => {
+test('版本 tag 创建草稿 release，带连字符的版本保持 prerelease', () => {
   expect(workflow).toContain("if: startsWith(github.ref, 'refs/tags/v')");
   expect(workflow).toContain('contents: write');
   expect(workflow).toContain('draft: true');
+  expect(workflow).toContain(
+    "prerelease: ${{ contains(github.ref_name, '-') }}"
+  );
 });
 
 test('DMG 文件名明确标记版本和 Apple Silicon 架构', () => {
@@ -285,9 +364,16 @@ test('DMG 文件名明确标记版本和 Apple Silicon 架构', () => {
 
 test('README 区分 macOS 正式发布与 Windows/Linux 实验构建', () => {
   expect(readme).toContain('macOS Tauri 重构版');
-  expect(readme).toContain('381.5 MiB');
-  expect(readme).toContain('83 MiB');
-  expect(readme).toContain('约 78%');
+  expect(readme).toContain('82.555 MiB');
+  expect(readme).toContain('22.582 MiB');
+  expect(readme).toContain('减少 72.6%');
+  expect(readme).toContain('DMG 为 11.846 MiB');
+  expect(readme).toContain('Rust Sidecar');
+  expect(readme).toContain('当前桌面包不再携带 Bun runtime');
+  expect(readme).toContain('ad-hoc Hardened Runtime seal');
+  expect(readme).toContain('stable 只');
+  expect(readme).toContain('canary 只接收 canary 更新');
+  expect(readme).toContain('`master` push');
   expect(readme).toContain('docs/performance-baseline.md');
   expect(readme).toContain('bun run build:tauri');
   expect(readme).toContain('bun run package:tauri:dmg');

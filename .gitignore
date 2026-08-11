@@ -43,7 +43,11 @@ devenv.local.nix
 # Generated TypeScript state
 *.tsbuildinfo
 
-# Tauri's Bun sidecar is generated during builds.
+# Generated Tauri sidecar binaries and compliance resources.
 /src-tauri/binaries/*
+/src-tauri/generated
 /src-tauri/target
 /src-tauri/gen/schemas
+
+# Local architecture plans
+/docs/sidecar-rust-migration.local.md

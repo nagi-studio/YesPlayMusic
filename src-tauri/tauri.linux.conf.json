@@ -3,16 +3,8 @@
   "bundle": {
     "targets": ["appimage", "deb"],
     "linux": {
-      "appimage": {
-        "files": {
-          "/usr/lib/yesplaymusic/sidecar.payload": "binaries/yesplaymusic-sidecar-linux.payload"
-        }
-      },
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
-        "files": {
-          "/usr/lib/yesplaymusic/sidecar.payload": "binaries/yesplaymusic-sidecar-linux.payload"
-        }
+        "depends": ["libayatana-appindicator3-1"]
       }
     },
     "icon": [

@@ -35,7 +35,9 @@ test('小窗双击进入播放队列，中窗提供明确的返回入口', () =>
   expect(lyrics).toContain('@dblclick="handleMiniDoubleClick"');
   expect(lyrics).toContain("this.$emit('expand-compact-window')");
   expect(app).toContain("this.$router.push({ name: 'next' })");
-  expect(navbar).toContain('title="回到播放栏 (Esc)"');
+  expect(navbar).toContain(
+    ":title=\"$t('nav.restoreCompactPlayerTitle', { shortcut: 'Esc' })\""
+  );
   expect(navbar).toContain("$emit('restore-compact-window')");
 });
 
@@ -93,7 +95,7 @@ test('双屏切换档位时沿用当前屏位置，只恢复目标档位尺寸',
 });
 
 test('中窗提供明确返回按钮和 Escape 快捷键', () => {
-  expect(navbar).toContain('<span>回到播放栏</span>');
+  expect(navbar).toContain("$t('nav.restoreCompactPlayer')");
   expect(navbar).toContain('<kbd>Esc</kbd>');
   expect(app).toContain("e.code === 'Escape'");
   expect(app).toContain('this.restoreCompactWindow()');
@@ -149,7 +151,7 @@ test('启动等待 renderer 恢复尺寸，超时兜底不影响 hidden smoke', 
   expect(smokeBranch).not.toContain('schedule_startup_show_fallback');
 });
 
-test('second-instance 先解除最小化再显示和聚焦', () => {
+test('恢复主窗口时先解除最小化再显示和聚焦', () => {
   const showMainWindow = tauriMain.slice(
     tauriMain.indexOf('fn show_main_window('),
     tauriMain.indexOf('fn show_pending_startup_window(')
@@ -158,10 +160,6 @@ test('second-instance 先解除最小化再显示和聚焦', () => {
   expect(showMainWindow.indexOf('window.unminimize()')).toBeLessThan(
     showMainWindow.indexOf('window.show()')
   );
-  expect(tauriMain).toContain(
-    'tauri_plugin_single_instance::init(|app, _, _| {'
-  );
-  expect(tauriMain).toContain('failed to restore the main window');
 });
 
 test('Windows 和 Linux 从 mini bar 展开时先退出最大化且不记忆全屏尺寸', () => {

@@ -31,18 +31,43 @@ export const UPDATER_BUILD_PLANS = Object.freeze({
   },
 });
 
-export async function createUpdaterBuildConfig(publicKey) {
-  const base = JSON.parse(
-    await readFile(
-      path.join(projectRoot, 'src-tauri/tauri.updater.conf.json'),
-      'utf8'
+export const CANARY_UPDATER_ENDPOINT =
+  'https://raw.githubusercontent.com/nagi-studio/YesPlayMusic/updater-feed/channels/canary.json';
+
+function updaterChannel(version) {
+  const match = version.match(
+    /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+  );
+  if (!match) throw new Error(`Invalid updater version: ${version}`);
+  const prerelease = match[1];
+  if (!prerelease) return 'stable';
+  if (/^canary\.(?:0|[1-9]\d*)$/.test(prerelease)) return 'canary';
+  throw new Error(`Unsupported updater prerelease channel: ${version}`);
+}
+
+export async function createUpdaterBuildConfig(publicKey, version) {
+  const [base, tauriConfig, packageJson] = await Promise.all(
+    [
+      'src-tauri/tauri.updater.conf.json',
+      'src-tauri/tauri.conf.json',
+      'package.json',
+    ].map(async file =>
+      JSON.parse(await readFile(path.join(projectRoot, file), 'utf8'))
     )
   );
+  const channel = updaterChannel(version ?? packageJson.version);
+  const endpoints =
+    channel === 'canary'
+      ? [CANARY_UPDATER_ENDPOINT]
+      : tauriConfig.plugins.updater.endpoints;
   return {
     ...base,
     plugins: {
+      ...base.plugins,
       updater: {
+        ...base.plugins?.updater,
         pubkey: publicKey,
+        endpoints,
       },
     },
   };

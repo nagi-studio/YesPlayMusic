@@ -8,6 +8,7 @@ import { isDesktopRuntime } from '@/utils/runtime';
 import { sendDesktop } from '@/services/desktopTransport';
 import { isLastfmCallbackLocation } from '@/services/lastfmAuth';
 import { syncDesktopSettings } from '@/services/desktopSettings';
+import { normalizePersistedLocale, resolveLocale } from '@/locale/catalog';
 
 const isLastfmCallback = isLastfmCallbackLocation(window.location);
 
@@ -27,19 +28,10 @@ watch(
 );
 
 if (appStore.settings.lang === null) {
-  const defaultLang = 'en';
-  const langMapper = new Map([
-    ['zh', 'zh-CN'],
-    ['zh-TW', 'zh-TW'],
-    ['en', 'en'],
-    ['tr', 'tr'],
-  ]);
-  const exactLanguage = navigator.language;
-  const baseLanguage = exactLanguage.slice(0, 2);
-  appStore.settings.lang =
-    langMapper.get(
-      langMapper.has(exactLanguage) ? exactLanguage : baseLanguage
-    ) ?? defaultLang;
+  appStore.settings.lang = resolveLocale(navigator.language);
+} else {
+  // Drop a locale that no longer ships instead of running with empty messages.
+  appStore.settings.lang = normalizePersistedLocale(appStore.settings.lang);
 }
 
 appStore.$onAction(({ name, after }) => {

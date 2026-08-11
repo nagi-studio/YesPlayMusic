@@ -1,6 +1,7 @@
 import { access, copyFile, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyUpdaterArtifactSignature } from './verify-updater-signature.mjs';
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -33,8 +34,10 @@ export const UPDATER_ARTIFACT_SPECS = Object.freeze({
 export async function collectUpdaterArtifacts(
   target,
   outputDir,
-  root = projectRoot
+  root = projectRoot,
+  publicKey = process.env.TAURI_UPDATER_PUBKEY
 ) {
+  if (!publicKey) throw new Error('Missing updater public key');
   const spec = UPDATER_ARTIFACT_SPECS[target];
   if (!spec) throw new Error(`Unsupported updater target: ${target}`);
   const sourceDir = path.join(
@@ -58,6 +61,7 @@ export async function collectUpdaterArtifacts(
   const artifactPath = path.join(sourceDir, artifactName);
   const signaturePath = `${artifactPath}.sig`;
   await access(signaturePath);
+  await verifyUpdaterArtifactSignature(artifactPath, signaturePath, publicKey);
   await mkdir(outputDir, { recursive: true });
   await copyFile(artifactPath, path.join(outputDir, artifactName));
   await copyFile(signaturePath, path.join(outputDir, `${artifactName}.sig`));

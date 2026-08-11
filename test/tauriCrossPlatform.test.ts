@@ -1,13 +1,24 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  assertWindowsGuiPe,
   hostTargetTriple,
-  sidecarBuildPlan,
-  writeLinuxSidecarBundle,
-} from '../scripts/build-sidecar.mjs';
+  installRustSidecarArtifact,
+  parseWindowsPeSubsystem,
+  rustSidecarBuildPlan,
+  shouldAssertWindowsGuiPe,
+} from '../scripts/build-rust-sidecar.mjs';
 import { tauriHostBuildPlan } from '../scripts/build-tauri-host.mjs';
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -23,14 +34,32 @@ const linuxConfig = JSON.parse(
 const rustMain = readFileSync('src-tauri/src/main.rs', 'utf8');
 const linuxMedia = readFileSync('src-tauri/src/linux_media.rs', 'utf8');
 
+function minimalPeImage(subsystem: number): Uint8Array {
+  const bytes = new Uint8Array(320);
+  const view = new DataView(bytes.buffer);
+  const peHeaderOffset = 0x80;
+  view.setUint16(0, 0x5a4d, true);
+  view.setUint32(0x3c, peHeaderOffset, true);
+  view.setUint32(peHeaderOffset, 0x00004550, true);
+  view.setUint16(peHeaderOffset + 20, 0x70, true);
+  view.setUint16(peHeaderOffset + 24, 0x20b, true);
+  view.setUint16(peHeaderOffset + 24 + 68, subsystem, true);
+  return bytes;
+}
+
 describe('Tauri 跨平台 Sidecar', () => {
   test('三个受支持平台生成 Tauri 要求的 target triple 文件名', () => {
-    const mac = sidecarBuildPlan({ targetTriple: 'aarch64-apple-darwin' });
-    const windows = sidecarBuildPlan({
-      targetTriple: 'x86_64-pc-windows-msvc',
+    const mac = rustSidecarBuildPlan({
+      targetTriple: 'aarch64-apple-darwin',
+      profile: 'release',
     });
-    const linux = sidecarBuildPlan({
+    const windows = rustSidecarBuildPlan({
+      targetTriple: 'x86_64-pc-windows-msvc',
+      profile: 'debug',
+    });
+    const linux = rustSidecarBuildPlan({
       targetTriple: 'x86_64-unknown-linux-gnu',
+      profile: 'release',
     });
 
     expect(mac.outputName).toBe('yesplaymusic-sidecar-aarch64-apple-darwin');
@@ -40,38 +69,70 @@ describe('Tauri 跨平台 Sidecar', () => {
     expect(linux.outputName).toBe(
       'yesplaymusic-sidecar-x86_64-unknown-linux-gnu'
     );
-    expect(windows.args).toContain('--target=bun-windows-x64-baseline');
-    expect(windows.args).toContain('--windows-hide-console');
-    expect(linux.args).toContain('--target=bun-linux-x64-baseline');
-    expect(linux.usesPayloadWrapper).toBe(true);
-    expect(linux.compileOutputPath).toEndWith('.raw');
-    expect(linux.payloadPath).toEndWith('yesplaymusic-sidecar-linux.payload');
+    expect(windows.args).toContain('x86_64-pc-windows-msvc');
+    expect(windows.args).not.toContain('--release');
+    expect(windows.artifactPath).toEndWith(
+      path.join('x86_64-pc-windows-msvc', 'debug', 'yesplaymusic-sidecar.exe')
+    );
+    expect(linux.args).toContain('--release');
+    expect(linux.args).toContain('--locked');
+    expect(linux.artifactPath).toEndWith(
+      path.join('x86_64-unknown-linux-gnu', 'release', 'yesplaymusic-sidecar')
+    );
+    expect(() => rustSidecarBuildPlan({ targetTriple: '__proto__' })).toThrow(
+      '暂不支持 Tauri target'
+    );
   });
 
-  test('Linux Sidecar 以不被 linuxdeploy 改写的 payload 原样封装', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'ypm-linux-sidecar-'));
-    const compileOutputPath = path.join(root, 'sidecar.raw');
+  test('Rust 产物经临时文件原子替换到 Tauri externalBin 路径', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ypm-rust-sidecar-'));
+    const artifactPath = path.join(root, 'yesplaymusic-sidecar.artifact');
     const outputPath = path.join(root, 'yesplaymusic-sidecar');
-    const payloadPath = path.join(root, 'yesplaymusic-sidecar-linux.payload');
     const original = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0, 1, 2, 3]);
     try {
-      await writeFile(compileOutputPath, original);
-      const { digest } = writeLinuxSidecarBundle({
-        compileOutputPath,
+      await writeFile(artifactPath, original);
+      await writeFile(outputPath, 'stale');
+      installRustSidecarArtifact({
+        artifactPath,
         outputPath,
-        payloadPath,
       });
-      const payload = await readFile(payloadPath);
-      const wrapper = await readFile(outputPath, 'utf8');
 
-      expect(payload.subarray(0, 4).toString()).toBe('YPM1');
-      expect(Array.from(payload.subarray(4))).toEqual(Array.from(original));
-      expect(wrapper).toContain(`sidecar-${digest}`);
-      expect(wrapper).toContain('exec "$cached" "$@"');
+      expect(Array.from(await readFile(outputPath))).toEqual(
+        Array.from(original)
+      );
+      expect((await readdir(root)).some(name => name.includes('.tmp-'))).toBe(
+        false
+      );
       if (process.platform !== 'win32') {
         expect((await stat(outputPath)).mode & 0o111).not.toBe(0);
-        expect((await stat(payloadPath)).mode & 0o444).toBe(0o444);
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('Rust 产物替换失败时保留旧目标并清理临时文件', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ypm-rust-sidecar-fail-'));
+    const artifactPath = path.join(root, 'yesplaymusic-sidecar.artifact');
+    const outputPath = path.join(root, 'yesplaymusic-sidecar');
+    const sentinelPath = path.join(outputPath, 'keep.txt');
+    try {
+      await writeFile(artifactPath, new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
+      await mkdir(outputPath, { recursive: true });
+      await writeFile(sentinelPath, 'old artifact remains\n', 'utf8');
+
+      expect(() =>
+        installRustSidecarArtifact({
+          artifactPath,
+          outputPath,
+        })
+      ).toThrow();
+      expect(await readFile(sentinelPath, 'utf8')).toBe(
+        'old artifact remains\n'
+      );
+      expect((await readdir(root)).some(name => name.includes('.tmp-'))).toBe(
+        false
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -107,13 +168,8 @@ describe('Tauri 本机安装包', () => {
     expect(windowsConfig.bundle.targets).toEqual(['nsis']);
     expect(windowsConfig.bundle.windows.nsis.installMode).toBe('currentUser');
     expect(linuxConfig.bundle.targets).toEqual(['appimage', 'deb']);
-    expect(linuxConfig.bundle.linux.appimage.files).toEqual({
-      '/usr/lib/yesplaymusic/sidecar.payload':
-        'binaries/yesplaymusic-sidecar-linux.payload',
-    });
-    expect(linuxConfig.bundle.linux.deb.files).toEqual(
-      linuxConfig.bundle.linux.appimage.files
-    );
+    expect(linuxConfig.bundle.linux.appimage).toBeUndefined();
+    expect(linuxConfig.bundle.linux.deb.files).toBeUndefined();
     // Tray icons dlopen the appindicator library; apt must install it with the deb.
     expect(linuxConfig.bundle.linux.deb.depends).toEqual([
       'libayatana-appindicator3-1',
@@ -124,6 +180,20 @@ describe('Tauri 本机安装包', () => {
     expect(packageJson.scripts['build:tauri:linux']).toContain(
       'x86_64-unknown-linux-gnu'
     );
+    expect(packageJson.scripts['build:sidecar']).toContain(
+      'build-rust-sidecar.mjs --release'
+    );
+    expect(packageJson.scripts['build:sidecar:dev']).toContain(
+      'build-rust-sidecar.mjs --debug'
+    );
+    expect(packageJson.scripts['build:sidecar:bun-reference']).toContain(
+      'build-sidecar.mjs'
+    );
+    expect(tauriConfig.bundle.externalBin).toEqual([
+      'binaries/yesplaymusic-sidecar',
+    ]);
+    expect(tauriConfig.build.beforeDevCommand).toContain('build:sidecar:dev');
+    expect(tauriConfig.build.beforeBuildCommand).toContain('build:sidecar');
   });
 
   test('Rust 外壳不再依赖 Windows 不存在的 /dev/urandom', () => {
@@ -137,12 +207,35 @@ describe('Tauri 本机安装包', () => {
     );
   });
 
-  test('Windows release 主程序和 Sidecar 都不弹命令行窗口', () => {
-    expect(rustMain).toContain('windows_subsystem = "windows"');
-    const windows = sidecarBuildPlan({
-      targetTriple: 'x86_64-pc-windows-msvc',
-    });
-    expect(windows.args).toContain('--windows-hide-console');
+  test('Windows Sidecar 产物使用 GUI PE Subsystem，不弹命令行窗口', () => {
+    const image = minimalPeImage(2);
+    expect(parseWindowsPeSubsystem(image)).toBe(2);
+    expect(() => assertWindowsGuiPe(image)).not.toThrow();
+    expect(() => assertWindowsGuiPe(minimalPeImage(3))).toThrow('实际为 3');
+    expect(() => parseWindowsPeSubsystem(new Uint8Array(64))).toThrow(
+      '不是 MZ 文件'
+    );
+  });
+
+  test('Windows GUI PE gate 只约束 release，不阻断 debug Sidecar', () => {
+    expect(
+      shouldAssertWindowsGuiPe({
+        targetTriple: 'x86_64-pc-windows-msvc',
+        profile: 'debug',
+      })
+    ).toBe(false);
+    expect(
+      shouldAssertWindowsGuiPe({
+        targetTriple: 'x86_64-pc-windows-msvc',
+        profile: 'release',
+      })
+    ).toBe(true);
+    expect(
+      shouldAssertWindowsGuiPe({
+        targetTriple: 'aarch64-apple-darwin',
+        profile: 'release',
+      })
+    ).toBe(false);
   });
 
   test('OSDLyrics 投递不占用 MPRIS 服务循环', () => {

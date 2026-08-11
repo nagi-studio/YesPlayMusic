@@ -25,8 +25,9 @@ jobs:
         with:
           bun-version: 1.3.12
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
+          components: clippy,rustfmt
           targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
@@ -46,6 +47,15 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Test Rust Sidecar
+        run: cargo test --locked --manifest-path src-tauri/sidecar/Cargo.toml
+
+      - name: Clippy Rust Sidecar
+        run: cargo clippy --locked --manifest-path src-tauri/sidecar/Cargo.toml --all-targets -- -D warnings
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: Prepare Tauri resources for Rust tests
         env:
           IS_TAURI: 'true'
@@ -53,8 +63,11 @@ jobs:
           bun run build:renderer
           bun run build:sidecar
 
-      - name: Test Rust backend
+      - name: Test Tauri backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Clippy Tauri backend
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Verify release version
         run: bun run verify:tauri:version -- "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
@@ -143,15 +156,30 @@ jobs:
 
       - name: Collect updater artifacts
         if: github.ref_type == 'tag'
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: bun scripts/collect-updater-artifacts.mjs darwin-aarch64 dist_tauri
 
       - name: Verify updater archive app signature
         if: github.ref_type == 'tag'
         run: bun scripts/verify-macos-updater.mjs
 
-      - name: Verify release checksum
+      - name: Verify complete macOS distribution set and checksums
         working-directory: dist_tauri
-        run: shasum -a 256 -c ./*.sha256
+        run: |
+          VERSION="$(node -p 'require("../package.json").version')"
+          REQUIRED_ARTIFACTS=(
+            "YesPlayMusic_${VERSION}_aarch64.dmg"
+            "YesPlayMusic_${VERSION}_aarch64.dmg.sha256"
+            "YesPlayMusic_${VERSION}_sidecar-source.tar.gz"
+            "YesPlayMusic_${VERSION}_sidecar-source.tar.gz.sha256"
+            "YesPlayMusic_${VERSION}_SOURCE-OFFER.md"
+            "YesPlayMusic_${VERSION}_SOURCE-OFFER.md.sha256"
+          )
+          for artifact in "${REQUIRED_ARTIFACTS[@]}"; do
+            test -s "$artifact" || { echo "Missing required release artifact: $artifact" >&2; exit 1; }
+          done
+          shasum -a 256 -c ./*.sha256
 
       - uses: actions/upload-artifact@v7
         with:
@@ -179,8 +207,9 @@ jobs:
         with:
           bun-version: 1.3.12
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
+          components: clippy,rustfmt
           targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
@@ -192,12 +221,6 @@ jobs:
         shell: pwsh
         run: Copy-Item .env.example .env
 
-      - name: Cache Bun Windows target runtime
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/bun-target-cache
-          key: bun-target-${{ runner.os }}-1.3.12-windows-x64-baseline
-
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
@@ -207,16 +230,27 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Test Rust Sidecar
+        run: cargo test --locked --manifest-path src-tauri/sidecar/Cargo.toml
+
+      - name: Clippy Rust Sidecar
+        run: cargo clippy --locked --manifest-path src-tauri/sidecar/Cargo.toml --all-targets -- -D warnings
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: Prepare Tauri resources for Rust tests
         env:
-          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-target-cache
           IS_TAURI: 'true'
         run: |
           bun run build:renderer
           bun run build:sidecar
 
-      - name: Test Rust backend
+      - name: Test Tauri backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Clippy Tauri backend
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Verify release version
         run: bun run verify:tauri:version -- "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
@@ -231,25 +265,34 @@ jobs:
 
       - name: Build unsigned Tauri NSIS installer
         if: github.ref_type != 'tag'
-        env:
-          # Keep Bun's target cache on the workspace drive to avoid cross-volume renames.
-          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-target-cache
         run: bun run build:tauri:windows
 
       - name: Build Tauri NSIS installer with updater artifacts
         if: github.ref_type == 'tag'
         env:
-          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-target-cache
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: bun run build:tauri:windows:updater
 
-      - name: Verify compiled Sidecar and UNM native addon
+      - name: Verify packaged Windows app compliance
         shell: pwsh
         run: |
-          & "src-tauri/binaries/yesplaymusic-sidecar-x86_64-pc-windows-msvc.exe" --unm-addon-smoke-test
-          if ($LASTEXITCODE -ne 0) { throw "Windows Sidecar smoke test failed" }
+          $packages = @(Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter *.exe)
+          if ($packages.Count -ne 1) { throw "Expected one NSIS installer, found $($packages.Count)" }
+          Get-Command 7z -ErrorAction Stop | Out-Null
+          bun scripts/verify-packaged-app-compliance.mjs windows-x86_64 $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Windows app compliance verification failed" }
+
+      - name: Verify Rust Sidecar and UNM
+        shell: pwsh
+        run: |
+          $sidecarSmoke = Start-Process `
+            -FilePath "src-tauri/binaries/yesplaymusic-sidecar-x86_64-pc-windows-msvc.exe" `
+            -ArgumentList "--unm-smoke-test" `
+            -Wait `
+            -PassThru
+          if ($sidecarSmoke.ExitCode -ne 0) { throw "Windows Sidecar smoke test failed with exit code $($sidecarSmoke.ExitCode)" }
 
       # Installing NSIS would mutate the runner; launch its assembled release layout instead.
       - name: Smoke packaged Windows runtime
@@ -286,6 +329,8 @@ jobs:
 
       - name: Collect updater artifacts
         if: github.ref_type == 'tag'
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: bun scripts/collect-updater-artifacts.mjs windows-x86_64 dist_tauri_windows
 
       - uses: actions/upload-artifact@v7
@@ -321,14 +366,16 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
+            squashfs-tools \
             xvfb
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.12
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
+          components: clippy,rustfmt
           targets: x86_64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
@@ -348,6 +395,15 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Test Rust Sidecar
+        run: cargo test --locked --manifest-path src-tauri/sidecar/Cargo.toml
+
+      - name: Clippy Rust Sidecar
+        run: cargo clippy --locked --manifest-path src-tauri/sidecar/Cargo.toml --all-targets -- -D warnings
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: Prepare Tauri resources for Rust tests
         env:
           IS_TAURI: 'true'
@@ -355,8 +411,11 @@ jobs:
           bun run build:renderer
           bun run build:sidecar
 
-      - name: Test Rust backend
+      - name: Test Tauri backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Clippy Tauri backend
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Verify release version
         run: bun run verify:tauri:version -- "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
@@ -371,9 +430,7 @@ jobs:
 
       - name: Build unsigned Tauri Linux packages
         if: github.ref_type != 'tag'
-        run: |
-          chmod +x scripts/ci/ldd
-          PATH="$GITHUB_WORKSPACE/scripts/ci:$PATH" bun run build:tauri:linux
+        run: bun run build:tauri:linux
 
       - name: Build Tauri Linux packages with updater artifacts
         if: github.ref_type == 'tag'
@@ -381,14 +438,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
-        run: |
-          chmod +x scripts/ci/ldd
-          PATH="$GITHUB_WORKSPACE/scripts/ci:$PATH" bun run build:tauri:linux:updater
+        run: bun run build:tauri:linux:updater
 
-      - name: Verify compiled Sidecar and UNM native addon
+      - name: Verify packaged Linux app compliance
         run: |
-          YPM_SIDECAR_SMOKE_CACHE="$(mktemp -d)"
-          XDG_CACHE_HOME="$YPM_SIDECAR_SMOKE_CACHE" src-tauri/binaries/yesplaymusic-sidecar-x86_64-unknown-linux-gnu --unm-addon-smoke-test
+          YPM_APPIMAGES=(src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage)
+          YPM_DEBS=(src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb)
+          test "${#YPM_APPIMAGES[@]}" -eq 1
+          test "${#YPM_DEBS[@]}" -eq 1
+          bun scripts/verify-packaged-app-compliance.mjs linux-x86_64-appimage "${YPM_APPIMAGES[0]}"
+          bun scripts/verify-packaged-app-compliance.mjs linux-x86_64-deb "${YPM_DEBS[0]}"
+
+      - name: Verify Rust Sidecar and UNM
+        run: src-tauri/binaries/yesplaymusic-sidecar-x86_64-unknown-linux-gnu --unm-smoke-test
 
       - name: Smoke packaged Linux AppImage runtime
         run: |
@@ -398,12 +460,11 @@ jobs:
       - name: Smoke packaged Linux deb Sidecar
         run: |
           YPM_DEB_SMOKE_ROOT="$(mktemp -d)"
-          YPM_DEB_SMOKE_CACHE="$(mktemp -d)"
           YPM_DEB_PACKAGES=(src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb)
           test "${#YPM_DEB_PACKAGES[@]}" -eq 1
           dpkg-deb -x "${YPM_DEB_PACKAGES[0]}" "$YPM_DEB_SMOKE_ROOT"
-          test "$(stat -c '%a' "$YPM_DEB_SMOKE_ROOT/usr/lib/yesplaymusic/sidecar.payload")" = 644
-          XDG_CACHE_HOME="$YPM_DEB_SMOKE_CACHE" "$YPM_DEB_SMOKE_ROOT/usr/bin/yesplaymusic-sidecar" --unm-addon-smoke-test
+          test ! -e "$YPM_DEB_SMOKE_ROOT/usr/lib/yesplaymusic/sidecar.payload"
+          "$YPM_DEB_SMOKE_ROOT/usr/bin/yesplaymusic-sidecar" --unm-smoke-test
 
       - name: Collect packages and create SHA-256 checksums
         if: github.event_name != 'pull_request'
@@ -423,6 +484,8 @@ jobs:
 
       - name: Collect updater artifacts
         if: github.ref_type == 'tag'
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: |
           bun scripts/collect-updater-artifacts.mjs linux-x86_64-appimage dist_tauri_linux
           bun scripts/collect-updater-artifacts.mjs linux-x86_64-deb dist_tauri_linux
@@ -468,7 +531,14 @@ jobs:
           name: YesPlayMusic-linux-x64-${{ github.sha }}
           path: release/linux
 
+      - name: Install updater artifact inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full squashfs-tools
+
       - name: Generate updater manifest
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           bun scripts/generate-updater-manifest.mjs release release/latest.json "$VERSION" "$GITHUB_REF_NAME"

@@ -1,0 +1,7 @@
+[
+  { "setting": 128000, "wire": "128000" },
+  { "setting": 192000, "wire": "192000" },
+  { "setting": 320000, "wire": "320000" },
+  { "setting": "flac", "wire": "350000" },
+  { "setting": 999000, "wire": "999000" }
+]

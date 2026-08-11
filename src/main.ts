@@ -10,6 +10,7 @@ import {
 import { isDesktopRuntime } from '@/utils/runtime';
 import { purgeLegacyDesktopAuthStorage } from '@/utils/authStorage';
 import { shouldOpenLibraryOnStartup } from '@/services/startupNavigation';
+import type { MessageKey } from '@/locale/catalog';
 
 window.resetApp = () => {
   localStorage.clear();
@@ -104,13 +105,13 @@ async function bootstrap() {
   }
   app.mount('#app');
   if (rendererMigration?.status === 'completed' && rendererMigration.notice) {
-    const noticeKeys: Record<LegacyMigrationNotice, string> = {
+    const noticeKeys = Object.freeze({
       complete: 'toast.legacyMigrationComplete',
       'partial-import': 'toast.legacyMigrationPartial',
       'cache-not-migrated': 'toast.legacyMigrationCache',
       'login-required': 'toast.legacyMigrationLogin',
       'login-and-cache': 'toast.legacyMigrationLoginAndCache',
-    };
+    } as const satisfies Record<LegacyMigrationNotice, MessageKey>);
     appStore.showToast(i18n.t(noticeKeys[rendererMigration.notice]));
   }
 }
