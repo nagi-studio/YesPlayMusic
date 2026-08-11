@@ -23,6 +23,7 @@ pub const DEFAULT_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_IO_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_LOOPBACK_IDLE_TIMEOUT: Duration = Duration::from_secs(380);
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
+const OVER_CAPACITY_DRAIN_TIMEOUT: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProxyRelayLimits {
@@ -283,7 +284,7 @@ pub async fn serve_with_limits(
         let permit = match semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                let _ = write_error(&mut stream, 503, "Service Unavailable").await;
+                reject_over_capacity(&mut stream).await;
                 continue;
             }
         };
@@ -305,6 +306,30 @@ pub async fn serve_with_limits(
         }
     }
     Ok(())
+}
+
+async fn reject_over_capacity(stream: &mut TcpStream) {
+    if write_error(stream, 503, "Service Unavailable")
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Drain request bytes briefly so Winsock does not replace the 503 with a reset.
+    let _ = stream.shutdown().await;
+    let mut buffer = [0_u8; 4096];
+    let drain = async {
+        let mut remaining = MAX_HEADER_BYTES;
+        while remaining > 0 {
+            let capacity = buffer.len().min(remaining);
+            match stream.read(&mut buffer[..capacity]).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => remaining -= read,
+            }
+        }
+    };
+    let _ = timeout(OVER_CAPACITY_DRAIN_TIMEOUT, drain).await;
 }
 
 async fn run_connection(
