@@ -412,15 +412,19 @@ struct TrayAvailabilityState(AtomicBool);
 #[cfg(target_os = "linux")]
 struct LinuxMediaState(Option<LinuxMedia>);
 
+// macOS menu bar cover/title rendering; only compiled elsewhere for unit tests.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct TrayCoverState(Mutex<Option<String>>);
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct TrayTitleRegistration {
     title: String,
     rendered: Option<String>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct TrayTitleState(Mutex<TrayTitleRegistration>);
 
@@ -433,8 +437,10 @@ struct GlobalShortcutRegistration {
 
 struct GlobalShortcutRegistrationState(Mutex<GlobalShortcutRegistration>);
 
+#[cfg(any(target_os = "macos", test))]
 const MAX_TRAY_COVER_BYTES: u64 = 2 * 1024 * 1024;
 
+#[cfg(any(target_os = "macos", test))]
 fn tray_cover_url(payload: &serde_json::Value) -> Option<&str> {
     payload
         .get("coverUrl")
@@ -443,6 +449,7 @@ fn tray_cover_url(payload: &serde_json::Value) -> Option<&str> {
         .filter(|url| !url.is_empty())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn character_display_width(character: char) -> usize {
     if matches!(
         character,
@@ -460,6 +467,7 @@ fn character_display_width(character: char) -> usize {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn truncate_by_display_width(title: &str, max_width: usize) -> String {
     let mut width = 0;
     for (index, character) in title.char_indices() {
@@ -471,6 +479,7 @@ fn truncate_by_display_width(title: &str, max_width: usize) -> String {
     title.to_string()
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn tray_title_for_visibility(title: &str, window_visible: bool) -> String {
     if window_visible {
         String::new()
@@ -545,6 +554,7 @@ fn spawn_tray_title_reconciler(app: &AppHandle) {
     });
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn decode_tray_cover(bytes: &[u8]) -> Result<TauriImage<'static>, String> {
     decode_tray_image(bytes, 64)
 }
@@ -570,6 +580,7 @@ fn decode_tray_image(bytes: &[u8], size: u32) -> Result<TauriImage<'static>, Str
     Ok(TauriImage::new_owned(cover.into_raw(), size, size))
 }
 
+#[cfg(any(target_os = "macos", test))]
 async fn download_tray_cover(url: &str) -> Result<TauriImage<'static>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -604,6 +615,7 @@ async fn download_tray_cover(url: &str) -> Result<TauriImage<'static>, String> {
     decode_tray_cover(&bytes)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn update_tray_cover(app: &AppHandle, payload: &serde_json::Value) {
     let Some(cover_url) = tray_cover_url(payload) else {
         return;
@@ -2293,8 +2305,11 @@ fn main() {
             app.manage(ClosePromptState(AtomicBool::new(false)));
             app.manage(TrayMenuState(Mutex::new(TrayMenuRegistration::default())));
             app.manage(TrayAvailabilityState(AtomicBool::new(false)));
-            app.manage(TrayCoverState::default());
-            app.manage(TrayTitleState::default());
+            #[cfg(any(target_os = "macos", test))]
+            {
+                app.manage(TrayCoverState::default());
+                app.manage(TrayTitleState::default());
+            }
             app.manage(DiscordPresenceHandle::default());
             #[cfg(target_os = "linux")]
             {
