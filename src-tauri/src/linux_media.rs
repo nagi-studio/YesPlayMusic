@@ -1,5 +1,3 @@
-#![cfg(target_os = "linux")]
-
 use std::{
     collections::{HashMap, VecDeque},
     future::{poll_fn, Future},
@@ -41,7 +39,6 @@ pub enum MediaControl {
 pub enum PlaybackState {
     Playing,
     Paused,
-    Stopped,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -471,7 +468,6 @@ fn to_playback_status(state: PlaybackState) -> PlaybackStatus {
     match state {
         PlaybackState::Playing => PlaybackStatus::Playing,
         PlaybackState::Paused => PlaybackStatus::Paused,
-        PlaybackState::Stopped => PlaybackStatus::Stopped,
     }
 }
 

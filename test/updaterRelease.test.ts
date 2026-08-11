@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
-  realpath,
   rm,
   rmdir,
   symlink,
@@ -529,7 +528,7 @@ test('installed smoke canonicalizes symlinked launch paths before Tauri resolves
       resolveTauriSmokeExecutable({
         executablePath: path.join(aliasRoot, 'yesplaymusic-tauri'),
       })
-    ).toBe(await realpath(executable));
+    ).toBe(realpathSync(executable));
   } finally {
     // Windows needs rmdir for a directory symlink; unlink/rm rejects it.
     if (process.platform === 'win32') {

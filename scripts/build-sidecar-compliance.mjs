@@ -723,8 +723,20 @@ const VERIFY_POWERSHELL = `$ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 Get-Content SHA256SUMS | ForEach-Object {
   if ($_ -notmatch '^([a-f0-9]{64})  (.+)$') { throw "Invalid SHA256SUMS line: $_" }
-  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Matches[2]).Hash.ToLowerInvariant()
-  if ($actual -ne $Matches[1]) { throw "Checksum mismatch: $($Matches[2])" }
+  $expected = $Matches[1]
+  $filePath = $Matches[2]
+  $stream = [System.IO.File]::OpenRead($filePath)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $actual = [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+  if ($actual -ne $expected) { throw "Checksum mismatch: $filePath" }
 }
 Write-Host 'Sidecar compliance source checksums verified.'
 `;

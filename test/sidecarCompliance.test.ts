@@ -333,6 +333,14 @@ describe('Rust Sidecar copyleft distribution bundle', () => {
     expect(
       await readFile(path.join(completeSourceDirectory, 'rebuild.sh'), 'utf8')
     ).toContain('--offline --locked');
+    const powershellVerifier = await readFile(
+      path.join(completeSourceDirectory, 'verify-sources.ps1'),
+      'utf8'
+    );
+    expect(powershellVerifier).toContain(
+      '[System.Security.Cryptography.SHA256]::Create()'
+    );
+    expect(powershellVerifier).not.toContain('Get-FileHash');
     await expect(
       readFile(path.join(outputDirectory, 'source', 'vendor'))
     ).rejects.toThrow();
