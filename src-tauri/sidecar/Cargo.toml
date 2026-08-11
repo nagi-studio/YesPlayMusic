@@ -45,5 +45,6 @@ url = "=2.5.8"
 libc = "=0.2.189"
 
 [target.'cfg(windows)'.dependencies]
+# unm_engine_ytdl 0.4.0 uses CREATE_NO_WINDOW but omits winapi's winbase feature.
 winapi = { version = "=0.3.9", features = ["winbase"] }
 windows-sys = { version = "=0.60.2", features = ["Win32_Foundation", "Win32_System_Threading"] }

@@ -342,12 +342,21 @@ describe('Rust Sidecar copyleft distribution bundle', () => {
     expect(powershellVerifier).toContain(
       '[System.Security.Cryptography.SHA256]::Create()'
     );
+    expect(powershellVerifier).toContain(
+      'OpenRead((Join-Path $PSScriptRoot $filePath))'
+    );
     expect(powershellVerifier).not.toContain('Get-FileHash');
     await expect(
       readFile(path.join(outputDirectory, 'source', 'vendor'))
     ).rejects.toThrow();
 
-    // The bundle ships both checkers; Windows has no shell for the .sh one.
+    const verifierInvocationDirectory = path.join(
+      fixture.root,
+      'verifier-invocation'
+    );
+    await mkdir(verifierInvocationDirectory);
+
+    // Invoke from outside the bundle so every checker must resolve its own files.
     await (process.platform === 'win32'
       ? execFileAsync(
           'powershell.exe',
@@ -358,12 +367,12 @@ describe('Rust Sidecar copyleft distribution bundle', () => {
             '-File',
             path.join(completeSourceDirectory, 'verify-sources.ps1'),
           ],
-          { cwd: completeSourceDirectory }
+          { cwd: verifierInvocationDirectory }
         )
       : execFileAsync(
           path.join(completeSourceDirectory, 'verify-sources.sh'),
           [],
-          { cwd: completeSourceDirectory }
+          { cwd: verifierInvocationDirectory }
         ));
   });
 

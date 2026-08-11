@@ -725,7 +725,7 @@ Get-Content SHA256SUMS | ForEach-Object {
   if ($_ -notmatch '^([a-f0-9]{64})  (.+)$') { throw "Invalid SHA256SUMS line: $_" }
   $expected = $Matches[1]
   $filePath = $Matches[2]
-  $stream = [System.IO.File]::OpenRead($filePath)
+  $stream = [System.IO.File]::OpenRead((Join-Path $PSScriptRoot $filePath))
   try {
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
