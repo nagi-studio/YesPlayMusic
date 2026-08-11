@@ -36,17 +36,19 @@ Tauri 2。应用不再捆绑 Chromium。窗口、菜单栏、媒体状态和 Sid
 原有桌面能力的 Tauri 对应实现和验收状态见
 [Electron → Tauri 功能迁移表](docs/feature-migration.md)。
 
-Rust Sidecar 迁移后的 `0.7.1-canary.1` 本机验收包中，Apple Silicon `.app` 从本 fork
-v0.7.0 的 82.555 MiB 降到 22.582 MiB，减少 72.6%；DMG 为 11.846 MiB。作为外部历史
-参考，上游 qier222 v0.4.10 官方 arm64 DMG 为 88.773 MiB，挂载后的 `.app` 为
-211.934 MiB，当前分别减少 86.7% 和 89.3%。
+Rust Sidecar 迁移后的 `0.8.0-canary.1` 本机验收候选包中，Apple Silicon `.app`
+从本 fork v0.7.0 的 84,536 KiB（82.555 MiB）降到 23,528 KiB（22.976563 MiB），
+减少 72.168%；DMG 为 12,551,495 bytes（11.970038 MiB）。作为外部历史参考，上游
+qier222 v0.4.10 官方 arm64 DMG 为 88.773 MiB，挂载后的 `.app` 为
+211.934 MiB，当前分别减少约 86.5% 和 89.2%。
 
-安装包实测的隐藏窗口完整进程树 CPU mean 为 0.57%，连续播放两个 5 分钟窗口的 Tauri
-主进程 CPU mean 为 1.26% 和 1.20%；Rust Sidecar 稳态 `phys_footprint` 为 8.97 至
-9.52 MiB，连续播放 10 分钟没有观察到 Sidecar 物理内存持续累积。相对历史 Bun Sidecar
-约 82 MB 的粗略记录，后端占用量级约低 88% 至 89%；这不是 matched run。完整进程树内存
-受 WebKit 和媒体缓存影响，尚无同场景 Bun 对照，因此不据此宣传整机内存降幅。逐样本
-证据、测量口径和限制见[性能迁移基线](docs/performance-baseline.md)。
+安装包实测的隐藏窗口完整进程树 CPU mean 为 0.15%，连续播放两个 5 分钟窗口的 Tauri
+主进程 CPU mean 为 0.30% 和 0.32%。播放 5 与 10 分钟时，Rust Sidecar
+`phys_footprint` 从 8.938004 MiB 降到 8.609901 MiB，没有观察到持续累积。相对历史
+Bun Sidecar 约 82 MB 的粗略记录，后端占用量级约低 89% 至 90%；这不是 matched
+run。完整进程树内存受 WebKit 和媒体缓存影响，尚无同场景 Bun 对照，因此不据此宣传整机内存降幅。
+四份 schema v3 证据各含 300 个逐秒样本；完整数据、测量口径和限制见
+[性能迁移基线](docs/performance-baseline.md)。
 
 **迷你播放器。** 把窗口压矮（高度小于 340）就会自动变成一条紧凑的播放条，
 左边小封面配歌名歌手，中间是当前这句歌词，右边是播放控制。只把窗口拖窄不会触发播放条，

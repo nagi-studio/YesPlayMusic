@@ -1,8 +1,8 @@
 # Bun Sidecar → Rust Sidecar 迁移与验收记录
 
-> 状态（2026-08-11）：57-route 静态合同门禁、Rust Sidecar 与 Rust-only 分发接线已在工作树实现；逐路 Node↔Rust differential 尚未实现。最终 adhoc Hardened Runtime DMG 的全新临时安装副本已完成 installed/core/WebView/supervisor、可见暂停稳态、窗口隐藏和连续播放性能验收；当前发布政策不采用 Developer ID/公证，它们不是 blocker。Windows/Ubuntu 实验安装包验收仍待完成。90 天观察期尚未开始，不能宣称正式收口。
+> 状态（2026-08-11）：57-route 静态合同门禁、Rust Sidecar 与 Rust-only 分发接线已在工作树实现；逐路 Node↔Rust differential 尚未实现。冻结在 `1b891bc1059f1b92b090bf08d56a12f63b5ab5a9` 的 `0.8.0-canary.1` pre-tag 本地 adhoc Hardened Runtime DMG 已完成 installed/core/WebView/supervisor、可见暂停、连续播放与窗口隐藏验收。Tag CI、updater 签名资产、canary feed 与真实发布仍为 **PENDING**；Developer ID/公证按当前政策为 **N/A**。Windows/Ubuntu 实验安装包验收仍待完成，90 天观察期尚未开始。
 >
-> 迁移基线：`b6efe0b850bca17bfd3d9c0ffc9061e6348c4f07`（v0.7.0 的 Bun 发行实现）。90 天起点必须是首个实际发布并投入使用的 Rust-only prerelease 的 tag、发布时间和 artifact SHA；当前为 `TBD`，工作树实现日期和本地 adhoc DMG 都不计入观察期。
+> 迁移基线：`b6efe0b850bca17bfd3d9c0ffc9061e6348c4f07`（v0.7.0 的 Bun 发行实现）。90 天起点必须是首个实际发布并投入使用的 Rust-only prerelease 的 tag、发布时间和 artifact SHA；当前为 `TBD`。上述 freeze commit、本地 DMG 及其 SHA 都不计入观察期，也不代表未来 tag CI artifact。
 
 ## 一句话结论
 
@@ -29,7 +29,7 @@ YesPlayMusic Tauri 主程序
 | ------------------------------------ | ------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 57-route inventory / static contract | **PASS**                 | `sidecarRouteManifest.test.ts`、manifest-driven Rust router                      | 无逐路 Node↔Rust request/decoder/comparator differential；不能称为 differential 完成 |
 | Rust Sidecar 行为与接入              | **PASS**                 | Rust router/upstream/proxy/cloud/UNM/lifecycle 行为测试，Rust `externalBin` 构建 | live 账号写入只允许作为手工 smoke，不进入 required CI                                |
-| macOS Rust-only 本地候选包           | **PASS（目标发布形态）** | 本文“macOS installed artifact 实测”及性能基线                                    | 真实 canary 发布                                                                     |
+| macOS Rust-only 本地候选包           | **PASS（目标发布形态）** | 本文“macOS installed artifact 实测”及性能基线                                    | tag CI 重建与 updater/canary endpoint 验收、真实 canary 发布                         |
 | Windows x64 / Ubuntu x64             | **PENDING（实验构建）**  | cross-build/配置与模块测试                                                       | NSIS 实装/卸载、AppImage 全新 XDG、deb 实装与 release WebView smoke                  |
 | 90 天 canary 与删除 Bun              | **NOT STARTED**          | 无                                                                               | 首个 prerelease、artifact SHA、每周记录、协议变化演练和连续 90 天                    |
 
@@ -45,12 +45,12 @@ YesPlayMusic Tauri 主程序
 
 任何面向用户或 canary 的单个安装包都只能包含一种后端：
 
-| 阶段                                                   | 仓库中的实现        | 安装包中的后端 | 包体积收益                                                                |
-| ------------------------------------------------------ | ------------------- | -------------- | ------------------------------------------------------------------------- |
-| 迁移基线                                               | Bun                 | Bun            | 基线                                                                      |
-| 阶段 1                                                 | Bun + Rust 合同实现 | Bun            | 无；Rust 只作为测试实现                                                   |
-| 阶段 2 canary candidate（当前工作树 `0.7.1-canary.1`） | Bun 参考源码 + Rust | **仅 Rust**    | macOS 本机 `.app` 已从 v0.7.0 的 82.555 MiB 降至 22.582 MiB；跨平台待验收 |
-| 阶段 3 正式收口                                        | Rust                | **仅 Rust**    | 需先满足 90 天门禁                                                        |
+| 阶段                                                   | 仓库中的实现        | 安装包中的后端 | 包体积收益                                                                   |
+| ------------------------------------------------------ | ------------------- | -------------- | ---------------------------------------------------------------------------- |
+| 迁移基线                                               | Bun                 | Bun            | 基线                                                                         |
+| 阶段 1                                                 | Bun + Rust 合同实现 | Bun            | 无；Rust 只作为测试实现                                                      |
+| 阶段 2 canary candidate（当前工作树 `0.8.0-canary.1`） | Bun 参考源码 + Rust | **仅 Rust**    | macOS 本机 `.app` 已从 v0.7.0 的 82.555 MiB 降至 22.976563 MiB；跨平台待验收 |
+| 阶段 3 正式收口                                        | Rust                | **仅 Rust**    | 需先满足 90 天门禁                                                           |
 
 禁止以下形态：
 
@@ -226,13 +226,15 @@ HTTP、cookie、云盘、UNM、音频和 proxy 的行为测试与对应 Rust 模
 
 #### canary observation log
 
-| 字段                          | 当前值                                  |
-| ----------------------------- | --------------------------------------- |
-| 首个 Rust-only prerelease/tag | `TBD`                                   |
-| artifact SHA / release URL    | `TBD`                                   |
-| 观察起止时间                  | `NOT STARTED`                           |
-| 每周 installed smoke          | `NOT STARTED`；当前 workflow 无定时任务 |
-| 真实 incident / 协议变化      | 无记录；本地工作树测试不计入 90 天      |
+| 字段                            | 当前值                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| pre-tag 本地候选包              | `0.8.0-canary.1` @ `1b891bc1059f1b92b090bf08d56a12f63b5ab5a9`；DMG SHA `372f921c…0bd08e`；不计入 90 天 |
+| 首个 Rust-only prerelease/tag   | `TBD`                                                                                                  |
+| 发布 artifact SHA / release URL | `TBD`；不以本地 DMG SHA 预填                                                                           |
+| tag CI / updater / canary feed  | **PENDING**；需用 updater secrets 重建并验收 canary endpoint、archive 和签名                           |
+| 观察起止时间                    | `NOT STARTED`                                                                                          |
+| 每周 installed smoke            | `NOT STARTED`；当前 workflow 无定时任务                                                                |
+| 真实 incident / 协议变化        | 无记录；本地工作树测试不计入 90 天                                                                     |
 
 后续每条观察必须记录构建 SHA、安装方式、脱敏步骤与结果。只写“本周正常”或依赖 required CI 之外的真实账号请求，均不能作为删除 Bun 的证据。
 
@@ -248,19 +250,20 @@ HTTP、cookie、云盘、UNM、音频和 proxy 的行为测试与对应 Rust 模
 
 下表区分“代码/模块测试”和“真实分发物”。`PARTIAL` 与 `PENDING` 不能计入 canary 发布 green：
 
-| 门禁                                               | 状态（2026-08-11）               | 证据 / 缺口                                                                                                                                                                                               |
-| -------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 57-route inventory 与 Rust router                  | **PASS**                         | manifest CLI/tests + Rust manifest-driven router                                                                                                                                                          |
-| 57-route Node↔Rust decoder/comparator differential | **PENDING**                      | 没有逐路执行 harness；comparator 当前只是 manifest 字段                                                                                                                                                   |
-| Cookie/安全边界                                    | **PASS（hermetic）**             | 双临时 listener + cookie jar 覆盖登录、重放、refresh、301 expiry 与 logout；真实账号只做 canary 手工 smoke                                                                                                |
-| 云盘                                               | **PASS（hermetic）**             | multipart/MD5/去重/阶段失败/auth/timeout、真实 MP3 ID3 与 FLAC Vorbis Comment 均覆盖；live 写入只做手工 smoke                                                                                             |
-| UNM/proxy/precise WAV/player                       | **PASS（hermetic）**             | Rust 行为测试；UNM CLI 以本地 fixture engine 真实执行 production `Executor` 的 search→retrieve；官方 provider transport 与 live codec/bit-depth/source smoke 仍属手工发布检查                             |
-| Supervisor                                         | **PASS**                         | Rust 行为测试覆盖 generation/health/shutdown race；macOS 真实进程覆盖端口占用、四代 SIGKILL、三次恢复与 restart-budget exhaustion                                                                         |
-| 应用 host/renderer 第三方合规                      | **PASS（macOS final artifact）** | `aarch64-apple-darwin` manifest 精确覆盖 328 个 host normal package 与 44 个 renderer final-chunk package；bundle 文件和 `SHA256SUMS` exact match；Windows/Linux artifact gate 已接线，真实实验包仍待构建 |
-| macOS adhoc DMG installed artifact                 | **PASS（本机）**                 | SHA、挂载后复制、arm64、bundle seal、无 Bun、Sidecar source/provenance、app-compliance、core/WebView/API、可见/隐藏/播放性能、退出回收                                                                    |
-| Developer ID / notarization（当前政策不采用）      | **N/A（非门禁）**                | 当前发布政策采用 adhoc Hardened Runtime；CI 分支只保留为未来可选能力，不影响当前发布判定                                                                                                                  |
-| Windows NSIS / Linux AppImage+deb installed smoke  | **PENDING（实验）**              | CI 仍有 raw exe、core-only 或解包 Sidecar 路径                                                                                                                                                            |
-| 90 天 canary                                       | **NOT STARTED**                  | 无 prerelease/tag/artifact SHA/观察记录                                                                                                                                                                   |
+| 门禁                                               | 状态（2026-08-11）           | 证据 / 缺口                                                                                                                                                                                               |
+| -------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 57-route inventory 与 Rust router                  | **PASS**                     | manifest CLI/tests + Rust manifest-driven router                                                                                                                                                          |
+| 57-route Node↔Rust decoder/comparator differential | **PENDING**                  | 没有逐路执行 harness；comparator 当前只是 manifest 字段                                                                                                                                                   |
+| Cookie/安全边界                                    | **PASS（hermetic）**         | 双临时 listener + cookie jar 覆盖登录、重放、refresh、301 expiry 与 logout；真实账号只做 canary 手工 smoke                                                                                                |
+| 云盘                                               | **PASS（hermetic）**         | multipart/MD5/去重/阶段失败/auth/timeout、真实 MP3 ID3 与 FLAC Vorbis Comment 均覆盖；live 写入只做手工 smoke                                                                                             |
+| UNM/proxy/precise WAV/player                       | **PASS（hermetic）**         | Rust 行为测试；UNM CLI 以本地 fixture engine 真实执行 production `Executor` 的 search→retrieve；官方 provider transport 与 live codec/bit-depth/source smoke 仍属手工发布检查                             |
+| Supervisor                                         | **PASS**                     | Rust 行为测试覆盖 generation/health/shutdown race；macOS 真实进程覆盖端口占用、四代 SIGKILL、三次恢复与 restart-budget exhaustion                                                                         |
+| 应用 host/renderer 第三方合规                      | **PASS（macOS 本地候选包）** | `aarch64-apple-darwin` manifest 精确覆盖 328 个 host normal package 与 44 个 renderer final-chunk package；bundle 文件和 `SHA256SUMS` exact match；Windows/Linux artifact gate 已接线，真实实验包仍待构建 |
+| macOS adhoc DMG installed artifact                 | **PASS（pre-tag 本机）**     | SHA、挂载后复制、arm64、bundle seal、无 Bun、Sidecar source/provenance、app-compliance、core/WebView/API、可见/隐藏/播放性能、退出回收                                                                    |
+| Tag CI / updater 签名资产 / canary feed            | **PENDING**                  | pre-tag 本地包公钥为空、endpoint 为 stable latest，且没有 updater archive/`.sig`；需用 secrets 重建并验收 canary endpoint 和签名                                                                          |
+| Developer ID / notarization（当前政策不采用）      | **N/A（非门禁）**            | 当前发布政策采用 adhoc Hardened Runtime；CI 分支只保留为未来可选能力，不影响当前发布判定                                                                                                                  |
+| Windows NSIS / Linux AppImage+deb installed smoke  | **PENDING（实验）**          | CI 仍有 raw exe、core-only 或解包 Sidecar 路径                                                                                                                                                            |
+| 90 天 canary                                       | **NOT STARTED**              | 无 prerelease/tag/artifact SHA/观察记录                                                                                                                                                                   |
 
 ### API 与 decoder
 
@@ -309,8 +312,8 @@ HTTP、cookie、云盘、UNM、音频和 proxy 的行为测试与对应 Rust 模
 - 非幂等请求失败后不跨后端重放。
 - supervisor 的重启预算、健康 token、PID identity 和 shutdown race 有行为测试；Windows release Sidecar 的 GUI subsystem 由 PE 产物 parser gate 验证，不用 Rust 源码字符串充当行为证据。
 - 主程序主动退出会写入 stdin NUL sentinel，Sidecar 收到后开始 drain；父进程异常消失时 EOF 触发同一路径。host 按对应 PID+generation 最多等待 7 秒，Sidecar 最多 drain 5 秒，超时后通过仍持有的 `CommandChild` 强制终止并再等 2 秒。sentinel 没有独立 ack，最终 `Terminated` 事件才是完成证据。
-- 本机 installed smoke 已观察到 Sidecar `Some(0)`、真实强杀后的新 PID/纯本地 health+player 恢复，以及正常退出后的进程和四端口回收。
-- 当前 macOS 最终 DMG 的全新临时安装副本已完成端口占用与 restart-budget exhaustion 的真实 Tauri adverse smoke。真实 `SIGKILL` 会进入生产 `CommandEvent::Terminated` 与 restart-budget 路径，因此没有新增 synthetic `--panic` test hook；Windows/Linux 的真实分发物状态由独立门禁行记录。
+- 本机 installed smoke 已观察到 Sidecar `Some(0)`、真实强杀后的新 PID/纯本地 health+player 恢复，以及正常退出后所有相关进程消失。退出前 `12754/27232/28232` 在监听，`27233` 因未配置代理始终没有 listener；退出后四个端口均无 listener。
+- 当前 macOS pre-tag 本地候选 DMG 的全新临时安装副本已完成端口占用与 restart-budget exhaustion 的真实 Tauri adverse smoke。真实 `SIGKILL` 会进入生产 `CommandEvent::Terminated` 与 restart-budget 路径，因此没有新增 synthetic `--panic` test hook；Windows/Linux 的真实分发物状态由独立门禁行记录。
 - 退出后 `12754/27232/27233/28232` 无残留 listener。
 
 #### macOS supervisor adverse smoke（2026-08-11）
@@ -324,15 +327,15 @@ YPM_TAURI_SMOKE_EXECUTABLE="/path/to/YesPlayMusic.app/Contents/MacOS/yesplaymusi
 
 脚本只会向本轮创建的 Sidecar 发送 `SIGKILL`。每次发送前同时验证测试 host 仍是预期 executable、Sidecar 是该 host 的直接子进程、Sidecar executable 精确匹配，且命令行 `--parent-pid` 指回该 host；任一条件变化都会拒绝发送信号。端口占用场景使用脚本自己持有的 `127.0.0.1:28232` listener。
 
-checksum 为 `aef77b48…a94d080b` 的最终 DMG 全新临时安装副本实测结果：
+checksum 为 `372f921c…0bd08e` 的 pre-tag 本地 DMG 全新临时安装副本实测结果：
 
-| 场景                     | 观察结果                                                                                                                                                                       | 判定     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| 四个并发冷启动           | primary host/Sidecar PID `1335/1336`；另外三个实例把焦点交给 primary 并以 0 退出                                                                                               | **PASS** |
-| 预占 `28232` 后启动      | host PID `1384`；四代 Sidecar 均输出真实 `Address already in use`，随后明确报告 restart budget exhausted 并以非零状态退出；无 Sidecar/端口残留                                 | **PASS** |
-| 连续强杀四代 Sidecar     | host PID `1392`，Sidecar PID `1395 → 1404 → 1419 → 1450`；前三次新 PID 的纯本地 `/__yesplaymusic/health` 与 `/player` 合同恢复，未用外部 NCM 网络状态冒充 supervisor readiness | **PASS** |
-| 第四代后的 unavailable   | 输出“后台服务已停止，自动重启失败。请重启应用。”；直到 host 自动退出，未出现第五代 Sidecar，本地服务未恢复                                                                     | **PASS** |
-| 两个场景退出后的资源回收 | fixture 持有 `28232` 时 `12754/27232/27233` 已回收；关闭 fixture 后四端口均无 listener，也没有对应 `--parent-pid` 的 Sidecar                                                   | **PASS** |
+| 场景                     | 观察结果                                                                                                                                                  | 判定     |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 四个并发冷启动           | primary host/Sidecar PID `78260/78264`；另外三个实例把焦点交给 primary 并以 0 退出                                                                        | **PASS** |
+| 预占 `28232` 后启动      | host PID `78302`；四次 Sidecar 启动均命中真实端口冲突，随后报告 restart budget exhausted 并以非零状态退出；无 Sidecar/端口残留                            | **PASS** |
+| 连续强杀四代 Sidecar     | host PID `78317`，Sidecar PID `78320 → 78329 → 78348 → 78380`；前三次新 PID 的纯本地 `/__yesplaymusic/health` 与 `/player` 合同恢复，第四次后耗尽重启预算 | **PASS** |
+| 第四代后的 unavailable   | 输出“后台服务已停止，自动重启失败。请重启应用。”；直到 host 自动退出，未出现第五代 Sidecar，本地服务未恢复                                                | **PASS** |
+| 两个场景退出后的资源回收 | fixture 持有 `28232` 时 `12754/27232/27233` 均无 listener；关闭 fixture 后四端口均无 listener，也没有对应 `--parent-pid` 的 Sidecar                       | **PASS** |
 
 这是运行产物与真实进程的行为证据；配套 Bun 测试只验证 executable/parent 身份筛选，未用 Rust 源码字符串替代上述 smoke。
 
@@ -347,14 +350,20 @@ checksum 为 `aef77b48…a94d080b` 的最终 DMG 全新临时安装副本实测�
 
 每个 smoke 都必须断言：Rust Sidecar 存在且架构正确，Bun runtime/旧 payload 不存在，Renderer 和 API 可用，updater archive 内容与正式安装包一致。
 
-当前证据：macOS 最终 DMG 已挂载并复制到全新临时目录后完成上述 runtime/资源检查；Developer ID/公证按当前政策为 **N/A**。updater manifest 已通过 Minisign 验签，并要求 artifact 内嵌版本与 manifest/tag 一致；同版本 canary 只接受 deep-equal manifest。updater archive 与 installer 的逐文件一致性和三个实验分发物仍是 **PENDING**。现有 CI 中 macOS 运行 build bundle 内 `.app`，Windows 运行 raw release exe，deb 只解包运行 Sidecar，三平台均以 core-only 为主；这些路径不能冒充完整 installed WebView smoke。
+当前证据：`0.8.0-canary.1` pre-tag 本地 DMG 已挂载并复制到全新临时目录，完成上述
+runtime/资源检查；Developer ID/公证按当前政策为 **N/A**。本地构建未注入 updater
+secrets，包内公钥为空、endpoint 为 stable latest，`dist_tauri/` 没有 updater archive/`.sig`。Tag CI
+需要重新构建并验收 canary endpoint、artifact 内嵌版本、updater 签名及 installer 逐文件一致性，
+当前均为 **PENDING**。本地 DMG SHA 不代表未来 CI artifact。三个实验分发物也仍为
+**PENDING**。现有 CI 中 macOS 运行 build bundle 内 `.app`，Windows 运行 raw release exe，deb 只解包运行
+Sidecar，三平台均以 core-only 为主；这些路径不能冒充完整 installed WebView smoke。
 
 ### 性能与体积
 
 沿用 [`performance-baseline.md`](./performance-baseline.md) 的完整进程树口径：
 
 - Bun v0.7.0 正式 Release 的 `.app` 是 84,536 KiB（82.555 MiB）；阶段 2 rust-only hard gate 为不高于 54.1 MiB（相对该精确基线约降低 34.5%）。构建脚本现会在打包/收集前用 `du -sk` 执行 hard gate。
-- 当前 `.app` 是 23,124 KiB（22.582 MiB），较本 fork v0.7.0 基线低 72.6%。上游 qier222 v0.4.10 官方 arm64 DMG 为 93,085,284 bytes，挂载后的 `.app` 为 217,020 KiB；当前分别低 86.7% 和 89.3%。上游数据只作外部历史参考，详细 checksum 与签名状态见 [`performance-baseline.md`](./performance-baseline.md)。
+- 当前 `.app` 是 23,528 KiB（22.976563 MiB），较本 fork v0.7.0 基线低 72.168%。上游 qier222 v0.4.10 官方 arm64 DMG 为 93,085,284 bytes，挂载后的 `.app` 为 217,020 KiB；当前分别低 86.516% 和 89.159%。上游数据只作外部历史参考，详细 checksum 与签名状态见 [`performance-baseline.md`](./performance-baseline.md)。
 - 30-40 MiB 是 stretch target，不作为首次切换 blocker。
 - 分别记录 macOS `.app`、Windows installed directory、Linux AppDir/deb installed root；下载压缩包大小单独记录。
 - 后端 phys_footprint 以当前 Bun 约 82 MB 为基线；采样冷启动、空闲 5 分钟、播放 5 分钟和播放 10 分钟泄漏趋势。
@@ -375,27 +384,33 @@ macOS 本地验收必须从 DMG 挂载后，把其中 `.app` 复制到新的临�
 
 ### macOS installed artifact 实测（2026-08-11）
 
-环境：Apple M5 Pro / arm64、macOS 26.4.1（25E253）、Bun 1.3.12、Rust 1.89.0。测试对象是最终 DMG 挂载后复制到全新临时目录的 `.app`，不是 `target/release` 裸二进制。工作树基线为 `b6efe0b` 加本文迁移改动。
+环境：Apple M5 Pro / arm64、macOS 26.4.1（25E253）、Bun 1.3.12、Rust 1.89.0。测试对象是冻结在
+`1b891bc1059f1b92b090bf08d56a12f63b5ab5a9` 的 `0.8.0-canary.1` pre-tag 本地 DMG。
+将挂载后的 `.app` 复制到全新临时目录再测试，未运行 `target/release` 裸二进制。
 
 #### 分发物与启动
 
-| 项目                       |                                                                                                                                                                    实测 | 判定                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------: | ----------------------------------------------------------------------------- |
-| DMG `0.7.1-canary.1`       |                                                                                                                                          12,421,069 bytes（11.846 MiB） | checksum `aef77b48eb649456a3a48f83805d82f350147f3a3d4be377f59557e2a94d080b`   |
-| 安装后 `.app`              |                                                                                                                                                23,124 KiB（22.582 MiB） | **PASS**；低于 54.1 MiB hard gate，较 v0.7.0 的 82.555 MiB 低 72.6%           |
-| 完整 Sidecar source asset  |                                                              75,069,552 bytes（71.592 MiB），SHA-256 `06513642e393dcdb02068f3ab95855bc2dc25c887f219e65ddd02d0d8157294a` | 独立 release asset，不进入 DMG/`.app`；空缓存 offline rebuild **PASS**        |
-| 主程序 / Sidecar           |                                                                                                                                                   两者均为 arm64 Mach-O | **PASS**                                                                      |
-| bundle seal / entitlements |                                                                                               `codesign --verify --deep --strict` 通过；host/Sidecar entitlement 均为空 | **PASS（当前目标发布形态）**；Developer ID/公证/staple 为 **N/A（当前政策）** |
-| Sidecar provenance/source  |                              无 Bun/runtime/payload；Rust Sidecar、GPL/LGPL、354 项 notices、13 份 copyleft source、manifest/relink kit 存在且 `verify-sources.sh` 全绿 | **PASS**                                                                      |
+| 项目                       | 实测                                                                                                                                                                    | 判定                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| DMG `0.8.0-canary.1`       | 12,551,495 bytes（11.970038 MiB）；SHA-256 `372f921c199f4d8b29534c24d61bef5a49546582177a2b94668ee0e6ea0bd08e`；`hdiutil verify` 通过                                    | **PASS（pre-tag 本地候选包）**                                                |
+| 安装后 `.app`              | 23,528 KiB（22.976563 MiB）                                                                                                                                             | **PASS**；低于 54.1 MiB hard gate，较 v0.7.0 的 82.555 MiB 低 72.168%         |
+| 完整 Sidecar source asset  | 75,084,239 bytes（71.605910 MiB）；SHA-256 `bb1bc56c406c1316b24d240ef17dc9a5af1c5a1f89c17984e4ccb3f5722e46d9`                                                           | 独立 release asset，不进入 DMG/`.app`                                         |
+| `SOURCE-OFFER`             | 905 bytes；SHA-256 `abd3ff34ae98d24acf9190150f2938c5834ca1cee08005bcffd76b760b55be29`；与 `.app` 内指引一致                                                             | **PASS**                                                                      |
+| Updater 签名资产           | 本机未配置发布私钥，未生成 updater archive/`.sig`；包内公钥为空，endpoint 为 stable latest                                                                              | **PENDING**；tag CI 需用 secrets 重建并验收 canary endpoint 与签名            |
+| 主程序 / Sidecar           | 两者均为 thin arm64 Mach-O                                                                                                                                              | **PASS**                                                                      |
+| bundle seal / entitlements | `codesign --verify --deep --strict` 通过；host/Sidecar 均为 adhoc Hardened Runtime 且 entitlement 为空                                                                  | **PASS（当前目标发布形态）**；Developer ID/公证/staple 为 **N/A（当前政策）** |
+| Sidecar provenance/source  | 无 Bun/runtime/payload；Rust Sidecar、GPL/LGPL、354 项 notices、13 份 copyleft source、manifest/relink kit 存在，marker 为 `YPM_RUST_SIDECAR_V1`                        | **PASS**                                                                      |
 | 应用合规资源               | target manifest 覆盖 328 个 host package 和 44 个 renderer package；342 项许可证文本来自 package，30 项来自 pinned curated donor；bundle bytes/`SHA256SUMS` exact match | **PASS**                                                                      |
-| core cold smoke            |                                 host/Sidecar PID `1146/1170`；API/Renderer 2.426/2.427 s；5 个样本完整 core RSS mean 95.92 MiB、CPU mean 0%；Sidecar RSS mean 12.11 MiB | **PASS**                                                                      |
-| WebView cold smoke         |   host/Sidecar PID `1252/1253`；WebView event 0.681 s，API/Renderer 1.096/1.097 s；8 个启动/网络样本 RSS mean 1,077.68 MiB、CPU mean 20.36%；Sidecar RSS mean 21.87 MiB | **PASS（启动行为）**；只作冷启动诊断                                          |
-| Sidecar 强杀恢复           |                                    host PID `1392`，Sidecar PID `1395 → 1404 → 1419 → 1450`；前三次纯本地 health/player 恢复，第四次耗尽预算，无外部 NCM readiness 依赖 | **PASS**                                                                      |
-| 正常退出                   |                                                                   core/WebView 与最终 Cmd+Q 均观察到 Sidecar `Some(0)`；host、Sidecar、三个 WebKit PID 与四端口全部回收 | **PASS**                                                                      |
+| core cold smoke            | API/Renderer 1.434/1.435 s；5 个样本完整 core RSS mean 95.11 MiB、CPU mean 0.08%；Sidecar RSS mean 11.45 MiB                                                            | **PASS**                                                                      |
+| WebView cold smoke         | WebView event 0.396 s，API/Renderer 2.204/2.204 s；8 个启动/网络样本 RSS mean 1,216.46 MiB、CPU mean 14.88%；Sidecar RSS mean 32.25 MiB                                 | **PASS（启动行为）**；只作冷启动诊断                                          |
+| Sidecar 强杀恢复           | host PID `78317`，Sidecar PID `78320 → 78329 → 78348 → 78380`；前三次纯本地 health/player 恢复，第四次耗尽预算                                                          | **PASS**                                                                      |
+| 正常退出                   | Cmd+Q 观察到 Sidecar `Some(0)`；PID `78505/78514/78517/78518/78519` 均已消失；退出前 `12754/27232/28232` 在监听，`27233` 未配置；退出后四端口均无 listener              | **PASS**                                                                      |
 
-本地产物是 adhoc Hardened Runtime 签名，这是当前目标发布形态，可以按现有流程对外发布。它证明结构、架构、sealed resources、空 entitlement 与运行行为，但不提供 Developer ID 身份认证；用户首次打开时按 README 的 Gatekeeper 放行步骤操作。
+本地产物的 adhoc Hardened Runtime seal、结构、架构、sealed resources、空 entitlement 和运行行为已通过。
+Developer ID 和公证按当前政策为 **N/A**，用户首次打开时按 README 的 Gatekeeper 放行步骤操作。
+这份 pre-tag 本地 DMG 还缺 tag CI 重建、canary endpoint 和 updater 签名验收，不作为已发布的 canary。
 
-下列结构、smoke 与长时性能数据全部来自 checksum 为 `aef77b48…a94d080b` 的 `0.7.1-canary.1` DMG，以及它挂载后复制出的同一个临时安装副本；没有用旧包或裸二进制的等价性推断替代重测。
+下列结构、smoke 与长时性能数据全部来自 checksum 为 `372f921c…0bd08e` 的本地 DMG，以及它挂载后复制出的同一个临时安装副本。该 SHA 不代表未来 tag CI artifact，也不计入 90 天观察期。
 
 #### 300 样本稳态结果（每秒一次）
 
@@ -403,24 +418,44 @@ macOS 本地验收必须从 DMG 挂载后，把其中 `.app` 复制到新的临�
 
 | 场景                 |  完整树 RSS mean / P95 / max | 完整树 CPU mean / P95 / max | Tauri RSS / CPU mean | Sidecar RSS / CPU mean |              Sidecar `phys_footprint` |
 | -------------------- | ---------------------------: | --------------------------: | -------------------: | ---------------------: | ------------------------------------: |
-| 可见暂停稳态 0-5 min | 428.65 / 937.89 / 938.27 MiB |           2.35 / 3.8 / 4.8% |    97.89 MiB / 1.07% |      12.30 MiB / 0.01% | 结束 8.969254 MiB；peak 38.188026 MiB |
-| 窗口隐藏 0-5 min     | 501.90 / 817.89 / 818.38 MiB |           0.57 / 1.5 / 5.6% |   104.48 MiB / 0.07% |      14.03 MiB / 0.00% | 结束 9.234924 MiB；peak 39.453674 MiB |
-| 连续播放 0-5 min     | 399.66 / 496.27 / 508.38 MiB |          3.42 / 6.5 / 38.4% |    97.23 MiB / 1.26% |      12.31 MiB / 0.01% |                   5 分钟 9.516151 MiB |
-| 连续播放 5-10 min    | 434.78 / 653.31 / 662.02 MiB |          4.18 / 8.9 / 72.6% |    97.70 MiB / 1.20% |      13.77 MiB / 0.01% |                  10 分钟 9.188049 MiB |
+| 可见暂停稳态 0-5 min | 255.35 / 256.89 / 256.98 MiB |           0.14 / 1.1 / 2.7% |    89.64 MiB / 0.01% |      10.15 MiB / 0.01% | 结束 8.203606 MiB；peak 38.391151 MiB |
+| 连续播放 0-5 min     | 804.52 / 812.97 / 818.38 MiB |          1.58 / 4.8 / 19.2% |    93.72 MiB / 0.30% |      12.92 MiB / 0.00% |                   5 分钟 8.938004 MiB |
+| 连续播放 5-10 min    | 834.59 / 843.91 / 857.64 MiB |          1.81 / 5.0 / 65.3% |    93.59 MiB / 0.32% |      13.28 MiB / 0.01% |                  10 分钟 8.609901 MiB |
+| 窗口隐藏 0-5 min     | 553.43 / 560.03 / 592.05 MiB |           0.15 / 1.0 / 1.5% |   103.78 MiB / 0.01% |      13.36 MiB / 0.01% |                          8.703651 MiB |
 
-可见暂停稳态在 API、Renderer 与 WebView ready 后开始，采样开始时根进程已运行约 3 分 44 秒。窗口保持可见，播放已暂停；采样前曾误触播放并立即暂停，因此这段数据不能解释为从未触发播放的初始空闲，也不能替代窗口隐藏数据。末帧完整树 RSS 为 309.58 MiB。
+四个时间窗口来自同一个 installed session：host/Sidecar PID 为 `78505/78514`，WebKit
+GPU/Networking/WebContent PID 为 `78517/78518/78519`。每份证据都有独立的 300 样本区间。
 
-窗口隐藏使用独立新启动的 host，PID 为 `9483`，Sidecar 为 `9492`，WebKit GPU/Networking/WebContent 为 `9493/9494/9495`。macOS 窗口隐藏状态经人工确认；末帧完整树 RSS 为 261.08 MiB。Cmd+Q 后 Sidecar 返回 `Some(0)`，5 个 PID 与四端口全部回收。
+播放开始时为 `あいつら全員同窓会 · ずっと真夜中でいいのに。`，进度约 221.55 s；5 分钟点为
+`真夜中のドア〜stay with me (シングルver.) · 松原みき` 4.30 s；10 分钟点为
+`Notion · The Rare Occasions` 57.62 s。三个检查点均由用户确认处于播放态。播放后暂停并隐藏窗口，
+进度保持静止，`lsappinfo` 同时报告 hidden 状态。
 
-连续播放 5 分钟点为 `NIGHT DANCER · imase` 2:17，10 分钟点为 `IRIS OUT · 米津玄師` 0:53；两次界面均显示“暂停”按钮，表示仍在播放。第二窗口完整树 RSS mean 比第一窗口高 8.8%，末帧从 351.97 MiB 增至 396.59 MiB。Sidecar RSS mean 从 12.31 MiB 增至 13.77 MiB，但 `phys_footprint` 从 9.516151 MiB 降至 9.188049 MiB。完整树波动主要来自 WebKit，不能归因于 Rust；10 分钟内没有 Sidecar 物理内存持续累积的证据，但这组数据不能证明长期运行不存在泄漏。
+第二个播放窗口的完整树 RSS mean 比第一个高 30.07 MiB（3.7%），增量主要来自 WebKit。
+Sidecar RSS mean 从 12.92 MiB 增至 13.28 MiB，`phys_footprint` 从 8.938004 MiB 降至
+8.609901 MiB。10 分钟内没有 Sidecar 物理内存持续累积的证据，这组数据不能证明长期运行不存在泄漏。
 
-四份证据均为 schemaVersion 3，各含 300 个 `rawSamples` 和逐进程摘要：[`installed-idle-5m.json`](./evidence/sidecar-rust-migration/installed-idle-5m.json)、[`installed-hidden-idle-5m.json`](./evidence/sidecar-rust-migration/installed-hidden-idle-5m.json)、[`installed-playback-0-5m.json`](./evidence/sidecar-rust-migration/installed-playback-0-5m.json) 和 [`installed-playback-5-10m.json`](./evidence/sidecar-rust-migration/installed-playback-5-10m.json)。四份均已由 `verify-performance-evidence.mjs` 独立重算通过，并绑定同一 DMG 和 installed executable SHA。窗口状态、曲目、进度与“暂停”按钮属于 native UI 人工观察，不在 JSON 内。
+四份性能证据均为 schemaVersion 3，各含 300 个 `rawSamples` 和逐进程摘要：
+[`installed-idle-5m.json`](./evidence/sidecar-rust-migration/installed-idle-5m.json)、
+[`installed-playback-0-5m.json`](./evidence/sidecar-rust-migration/installed-playback-0-5m.json)、
+[`installed-playback-5-10m.json`](./evidence/sidecar-rust-migration/installed-playback-5-10m.json) 和
+[`installed-hidden-idle-5m.json`](./evidence/sidecar-rust-migration/installed-hidden-idle-5m.json)。四份均已由
+`verify-performance-evidence.mjs` 独立重算通过，并绑定同一 DMG 和 installed executable SHA。人工 UI、
+Sidecar `phys_footprint` 与退出回收记录在
+[`installed-footprints.json`](./evidence/sidecar-rust-migration/installed-footprints.json)。
 
 判定：
 
-- **PASS**：包体积 hard gate；隐藏窗口完整树 CPU mean 0.57% ≤ 2%；播放态 Tauri CPU mean 1.26% / 1.20% ≤ 10%；Sidecar `phys_footprint` 从播放 5 分钟的 9.516151 MiB 降至 10 分钟的 9.188049 MiB；supervisor recovery 与 stdin sentinel graceful 退出。
-- **观察项**：可见暂停稳态完整树 CPU mean 为 2.35%，Tauri 主进程为 1.07%，该场景不用于替代窗口隐藏门禁。播放第二窗口完整树 RSS mean 比第一窗口高 8.8%，末帧从 351.97 MiB 增至 396.59 MiB。Sidecar RSS mean 增加 1.46 MiB，`phys_footprint` 减少 0.328102 MiB；完整树仍需 matched Bun/WebKit 对照，不能把 WebKit 波动宣传为后端收益。
-- **不能宣称**：尚未在同一机器、同一场景重跑 Bun 安装包，因此不能据此宣传完整树相对 Bun/Electron 降幅；当前只能确认 Rust Sidecar 自身远低于历史 Bun Sidecar 约 82 MB `phys_footprint`。
+- **PASS**：包体积 hard gate；隐藏窗口完整树 CPU mean 0.15% ≤ 2%；播放态 Tauri CPU mean
+  0.30% / 0.32% ≤ 10%；Sidecar `phys_footprint` 从播放 5 分钟的 8.938004 MiB 降至
+  10 分钟的 8.609901 MiB；supervisor recovery 与 stdin sentinel graceful 退出。
+- **观察项**：可见暂停稳态完整树 CPU mean 为 0.14%，Tauri 主进程为 0.01%；播放第二窗口完整树
+  RSS mean 比第一窗口高 30.07 MiB（3.7%）。Sidecar RSS mean 增加 0.36 MiB，
+  `phys_footprint` 减少 0.328103 MiB。完整树仍需 matched Bun/WebKit 对照，WebKit 波动不计作后端收益。
+- **PENDING**：tag CI 生成的最终 canary artifact、updater archive/`.sig`、canary endpoint 与 feed；
+  本地候选包 SHA 不预填到发布观察记录。
+- **不能宣称**：尚未在同一机器、同一场景重跑 Bun 安装包，完整树相对 Bun/Electron 的降幅
+  仍未确定。Rust Sidecar 自身远低于历史 Bun Sidecar 约 82 MB `phys_footprint`。
 
 ## 依赖与许可证决策
 

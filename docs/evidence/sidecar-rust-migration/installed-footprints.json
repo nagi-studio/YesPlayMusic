@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "1b891bc1059f1b92b090bf08d56a12f63b5ab5a9",
+  "artifact": {
+    "fileName": "YesPlayMusic_0.8.0-canary.1_aarch64.dmg",
+    "bytes": 12551495,
+    "sha256": "372f921c199f4d8b29534c24d61bef5a49546582177a2b94668ee0e6ea0bd08e"
+  },
+  "executable": {
+    "bytes": 8580928,
+    "sha256": "408e0cb490d1be40dfe2233bf9f9e7138fa6f59308dcbb4905ffb6edac2d9897"
+  },
+  "session": {
+    "hostPid": 78505,
+    "sidecarPid": 78514,
+    "webkitPids": {
+      "gpu": 78517,
+      "network": 78518,
+      "content": 78519
+    }
+  },
+  "footprintObservations": [
+    {
+      "scenario": "visible-paused-0-5m",
+      "evidenceFile": "installed-idle-5m.json",
+      "sidecarPhysFootprintMiB": 8.203606,
+      "sidecarProcessLifetimePeakMiB": 38.391151
+    },
+    {
+      "scenario": "playback-0-5m",
+      "evidenceFile": "installed-playback-0-5m.json",
+      "sidecarPhysFootprintMiB": 8.938004
+    },
+    {
+      "scenario": "playback-5-10m",
+      "evidenceFile": "installed-playback-5-10m.json",
+      "sidecarPhysFootprintMiB": 8.609901
+    },
+    {
+      "scenario": "hidden-paused-0-5m",
+      "evidenceFile": "installed-hidden-idle-5m.json",
+      "sidecarPhysFootprintMiB": 8.703651
+    }
+  ],
+  "uiObservations": {
+    "playbackCheckpoints": [
+      {
+        "playbackElapsedMinutes": 0,
+        "track": "あいつら全員同窓会",
+        "artist": "ずっと真夜中でいいのに。",
+        "trackProgressSeconds": 221.55,
+        "trackProgressApproximate": true,
+        "state": "user-confirmed-playing"
+      },
+      {
+        "playbackElapsedMinutes": 5,
+        "track": "真夜中のドア〜stay with me (シングルver.)",
+        "artist": "松原みき",
+        "trackProgressSeconds": 4.3,
+        "trackProgressApproximate": false,
+        "state": "user-confirmed-playing"
+      },
+      {
+        "playbackElapsedMinutes": 10,
+        "track": "Notion",
+        "artist": "The Rare Occasions",
+        "trackProgressSeconds": 57.62,
+        "trackProgressApproximate": false,
+        "state": "user-confirmed-playing"
+      }
+    ],
+    "hiddenIdle": {
+      "playbackProgress": "static",
+      "lsappinfoHidden": true
+    }
+  },
+  "exitObservation": {
+    "method": "Cmd+Q",
+    "sidecarTermination": "Some(0)",
+    "terminatedPids": [78505, 78514, 78517, 78518, 78519],
+    "boundPortsBeforeExit": [12754, 27232, 28232],
+    "unconfiguredPortsBeforeExit": [27233],
+    "portsWithoutListenersAfterExit": [12754, 27232, 27233, 28232]
+  },
+  "performanceEvidenceVerification": {
+    "status": "pass",
+    "schemaVersion": 3,
+    "samplesPerFile": 300,
+    "files": [
+      "installed-idle-5m.json",
+      "installed-playback-0-5m.json",
+      "installed-playback-5-10m.json",
+      "installed-hidden-idle-5m.json"
+    ]
+  }
+}

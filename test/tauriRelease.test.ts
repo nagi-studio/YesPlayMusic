@@ -328,10 +328,7 @@ test('tag 和所有应用版本字段必须完全一致', () => {
 });
 
 test('Cargo.lock 中两个 workspace package 都必须唯一存在', () => {
-  for (const packageName of [
-    'yesplaymusic-tauri',
-    'yesplaymusic-sidecar',
-  ]) {
+  for (const packageName of ['yesplaymusic-tauri', 'yesplaymusic-sidecar']) {
     const block = `[[package]]\nname = "${packageName}"\nversion = "0.8.0-canary.1"\n`;
     expect(readUniqueCargoLockPackageVersion(block, packageName)).toBe(
       '0.8.0-canary.1'
@@ -365,9 +362,9 @@ test('DMG 文件名明确标记版本和 Apple Silicon 架构', () => {
 test('README 区分 macOS 正式发布与 Windows/Linux 实验构建', () => {
   expect(readme).toContain('macOS Tauri 重构版');
   expect(readme).toContain('82.555 MiB');
-  expect(readme).toContain('22.582 MiB');
-  expect(readme).toContain('减少 72.6%');
-  expect(readme).toContain('DMG 为 11.846 MiB');
+  expect(readme).toContain('22.976563 MiB');
+  expect(readme).toContain('减少 72.168%');
+  expect(readme).toContain('DMG 为 12,551,495 bytes（11.970038 MiB）');
   expect(readme).toContain('Rust Sidecar');
   expect(readme).toContain('当前桌面包不再携带 Bun runtime');
   expect(readme).toContain('ad-hoc Hardened Runtime seal');
