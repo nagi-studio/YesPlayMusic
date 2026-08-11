@@ -5,6 +5,7 @@ import {
   mkdtemp,
   realpath,
   rm,
+  rmdir,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -530,7 +531,12 @@ test('installed smoke canonicalizes symlinked launch paths before Tauri resolves
       })
     ).toBe(await realpath(executable));
   } finally {
-    await rm(aliasRoot, { force: true });
+    // Windows needs rmdir for a directory symlink; unlink/rm rejects it.
+    if (process.platform === 'win32') {
+      await rmdir(aliasRoot).catch(() => undefined);
+    } else {
+      await rm(aliasRoot, { force: true });
+    }
     await rm(realRoot, { recursive: true, force: true });
   }
 });

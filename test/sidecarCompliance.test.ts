@@ -337,11 +337,24 @@ describe('Rust Sidecar copyleft distribution bundle', () => {
       readFile(path.join(outputDirectory, 'source', 'vendor'))
     ).rejects.toThrow();
 
-    await execFileAsync(
-      path.join(completeSourceDirectory, 'verify-sources.sh'),
-      [],
-      { cwd: completeSourceDirectory }
-    );
+    // The bundle ships both checkers; Windows has no shell for the .sh one.
+    await (process.platform === 'win32'
+      ? execFileAsync(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            path.join(completeSourceDirectory, 'verify-sources.ps1'),
+          ],
+          { cwd: completeSourceDirectory }
+        )
+      : execFileAsync(
+          path.join(completeSourceDirectory, 'verify-sources.sh'),
+          [],
+          { cwd: completeSourceDirectory }
+        ));
   });
 
   test('Tauri maps the generated bundle into every platform package', async () => {
