@@ -60,7 +60,7 @@ jobs:
         env:
           IS_TAURI: 'true'
         run: |
-          bun run build:renderer
+          bun run build:tauri:renderer
           bun run build:sidecar
 
       - name: Test Tauri backend
@@ -243,7 +243,7 @@ jobs:
         env:
           IS_TAURI: 'true'
         run: |
-          bun run build:renderer
+          bun run build:tauri:renderer
           bun run build:sidecar
 
       - name: Test Tauri backend
@@ -408,7 +408,7 @@ jobs:
         env:
           IS_TAURI: 'true'
         run: |
-          bun run build:renderer
+          bun run build:tauri:renderer
           bun run build:sidecar
 
       - name: Test Tauri backend

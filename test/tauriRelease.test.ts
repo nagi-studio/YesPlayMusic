@@ -210,7 +210,10 @@ test('三平台干净 runner 在 Rust 测试前先生成 Tauri 资源', () => {
     const sidecarTestIndex = job.indexOf(
       'cargo test --locked --manifest-path src-tauri/sidecar/Cargo.toml'
     );
-    const rendererIndex = job.indexOf('bun run build:renderer');
+    // Must be build:tauri:renderer: plain build:renderer skips
+    // build-app-compliance.mjs, so generated/app-compliance is missing and the
+    // Tauri build script rejects the declared resource path.
+    const rendererIndex = job.indexOf('bun run build:tauri:renderer');
     const sidecarIndex = job.indexOf('bun run build:sidecar');
     const rustTestIndex = job.indexOf(
       'run: cargo test --locked --manifest-path src-tauri/Cargo.toml'
