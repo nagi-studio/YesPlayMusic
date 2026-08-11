@@ -337,7 +337,7 @@ async fn run_connection(
     upstream: UpstreamProxy,
     limits: ProxyRelayLimits,
     shutdown: CancellationToken,
-    _permit: OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
 ) {
     let _ = client.set_nodelay(true);
     let result = tokio::select! {
@@ -345,6 +345,7 @@ async fn run_connection(
         _ = shutdown.cancelled() => Err(ConnectionError::Cancelled),
         result = handle_connection(&mut client, &upstream, &limits) => result,
     };
+    drop(permit);
     if let Err(ConnectionError::Io(error)) = result {
         let _ = error.kind();
     }
