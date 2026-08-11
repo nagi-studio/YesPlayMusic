@@ -17,8 +17,10 @@ const sleep = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function takeSample(options) {
+  // args= not comm=: Linux truncates comm to 15 chars, which hides the
+  // yesplaymusic-tauri / yesplaymusic-sidecar names role detection needs.
   const result = Bun.spawnSync(
-    ['ps', '-axo', 'pid=,ppid=,lstart=,rss=,%cpu=,comm='],
+    ['ps', '-axo', 'pid=,ppid=,lstart=,rss=,%cpu=,args='],
     {
       env: { ...process.env, LC_ALL: 'C' },
     }
