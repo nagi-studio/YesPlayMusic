@@ -154,8 +154,9 @@ fn process_is_alive(pid: u32) -> bool {
     }
     let mut exit_code = 0_u32;
     // SAFETY: exit_code is writable and handle remains valid until CloseHandle.
-    let alive =
-        unsafe { GetExitCodeProcess(handle, &mut exit_code) != 0 && exit_code == STILL_ACTIVE };
+    let alive = unsafe {
+        GetExitCodeProcess(handle, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32
+    };
     // SAFETY: handle was returned by OpenProcess and is no longer used.
     unsafe { CloseHandle(handle) };
     alive
