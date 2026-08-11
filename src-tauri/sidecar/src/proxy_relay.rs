@@ -1446,9 +1446,15 @@ NSmusQ/TUGcH28k4d4xY8n8=
 
     #[tokio::test]
     async fn enforces_header_request_and_connection_limits() {
+        let unavailable_listener = TcpListener::bind((HOST, 0)).await.unwrap();
+        let unavailable_address = unavailable_listener.local_addr().unwrap();
+        let unavailable_request = format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+            unavailable_address.port()
+        );
         let limits = ProxyRelayLimits {
             max_connections: 1,
-            connect_timeout: Duration::from_millis(80),
+            connect_timeout: Duration::from_secs(1),
             header_timeout: Duration::from_millis(80),
             io_idle_timeout: Duration::from_millis(80),
             loopback_idle_timeout: Duration::from_millis(80),
@@ -1456,11 +1462,12 @@ NSmusQ/TUGcH28k4d4xY8n8=
         let relay = start_relay_with_limits(UpstreamProxy::direct(), limits).await;
 
         let (echo_address, echo_task) = start_echo().await;
+        drop(unavailable_listener);
         let mut tunnel =
             open_tunnel(relay.address, &format!("127.0.0.1:{}", echo_address.port())).await;
         let mut queued = TcpStream::connect(relay.address).await.unwrap();
         queued
-            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n")
+            .write_all(unavailable_request.as_bytes())
             .await
             .unwrap();
         let (queued_response, queued_header_end) =
@@ -1482,12 +1489,12 @@ NSmusQ/TUGcH28k4d4xY8n8=
             .unwrap();
         assert!(String::from_utf8_lossy(&idle_response).contains(" 408 "));
 
-        let response = request(
-            relay.address,
-            b"GET / HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n",
-        )
-        .await;
-        assert!(String::from_utf8_lossy(&response).contains(" 502 "));
+        let response = request(relay.address, unavailable_request.as_bytes()).await;
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.contains(" 502 "),
+            "unexpected response: {response}"
+        );
 
         let prefix = b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Large: ";
         let oversized = vec![b'a'; MAX_HEADER_BYTES - prefix.len()];
