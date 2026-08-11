@@ -1491,8 +1491,10 @@ NSmusQ/TUGcH28k4d4xY8n8=
 
         let response = request(relay.address, unavailable_request.as_bytes()).await;
         let response = String::from_utf8_lossy(&response);
+        let status = parse_response_status(response.as_bytes());
+        // Winsock may time out a released loopback port instead of refusing it.
         assert!(
-            response.contains(" 502 "),
+            matches!(status, Some(502 | 504)),
             "unexpected response: {response}"
         );
 
