@@ -18,6 +18,12 @@ const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(2);
 const IDLE_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
+// After a drain barrier completes, sweep briefly until the line is quiet
+// so stale replies from earlier probers cannot leak past the barrier.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const QUIET_WINDOW: Duration = Duration::from_millis(150);
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const QUIET_SWEEP_CAP: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Appearance {
@@ -185,7 +191,7 @@ mod platform {
 
     use super::{
         find_da1_end, parse_response, ProbeResponse, Rgb, DA1_QUERY, FIRST_BYTE_TIMEOUT,
-        IDLE_TIMEOUT, OSC_11_WITH_DA1_QUERY, TOTAL_TIMEOUT,
+        IDLE_TIMEOUT, OSC_11_WITH_DA1_QUERY, QUIET_SWEEP_CAP, QUIET_WINDOW, TOTAL_TIMEOUT,
     };
 
     const POLLIN: c_short = 0x0001;
@@ -215,7 +221,37 @@ mod platform {
     }
 
     pub(super) fn drain_pending() {
-        let _ = transact(DA1_QUERY);
+        // A stale DA1 reply left over from an earlier prober (e.g. a timed
+        // out Picker query) can satisfy the barrier before the reply to
+        // OUR query arrives. After the barrier, keep sweeping until the
+        // line goes quiet so no reply survives into the event stream.
+        if transact(DA1_QUERY).is_none() {
+            return;
+        }
+        let mut stdin = ManuallyDrop::new(unsafe { File::from_raw_fd(STDIN_FD) });
+        let deadline = Instant::now() + QUIET_SWEEP_CAP;
+        loop {
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+            else {
+                return;
+            };
+            match wait_readable(STDIN_FD, QUIET_WINDOW.min(remaining)) {
+                Ok(true) => {
+                    let mut byte = [0];
+                    match stdin.read(&mut byte) {
+                        Ok(1) => {}
+                        Ok(_) => return,
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => return,
+                    }
+                }
+                Ok(false) => return,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return,
+            }
+        }
     }
 
     /// Send a query whose reply chain ends in a DA1 response and collect

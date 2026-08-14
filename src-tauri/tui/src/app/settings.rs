@@ -432,8 +432,12 @@ impl AppState {
         let pixel_changed = (before.pixel_scale - self.config.pixel_scale).abs() > f32::EPSILON
             || before.cover_detail != self.config.cover_detail
             || before.cover_palette != self.config.cover_palette;
+        // The spectrum only claims cover rows in the stacked layout's
+        // bottom band; in the side layout it lives in the right panel, so
+        // toggling it must not reload the cover (visible vinyl flash).
         let layout_changed = before.layout != self.config.layout
-            || before.spectrum_enabled != self.config.spectrum_enabled;
+            || (before.spectrum_enabled != self.config.spectrum_enabled
+                && self.layout == PlayLayout::Stacked);
 
         if theme_changed {
             self.theme = restored_theme.unwrap_or_else(|| {

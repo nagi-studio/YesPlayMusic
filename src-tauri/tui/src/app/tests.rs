@@ -1315,6 +1315,51 @@ async fn spectrum_setting_reflows_cover_geometry_immediately() {
 }
 
 #[tokio::test]
+async fn escape_walks_out_of_search_instead_of_bouncing_back_to_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.update(Action::SwitchView(View::Search), &fx);
+    assert!(state.search.input);
+    state.search.query = "rain".into();
+    let request = state.search.submit().unwrap();
+    assert!(state.search.accept(
+        request.seq,
+        &request.query,
+        request.channel,
+        crate::api::SearchPayload::Songs(crate::api::SearchPage {
+            items: vec![row(1)],
+            total: 1,
+        }),
+    ));
+
+    // First Esc hands focus to the result list, second Esc leaves the
+    // view; navigate_back must not bounce focus back into the input.
+    state.update(raw_key(KeyCode::Esc), &fx);
+    assert!(!state.search.input);
+    state.update(raw_key(KeyCode::Esc), &fx);
+    assert_eq!(state.view, View::NowPlaying);
+    assert_eq!(state.search.current_len(), 1, "results survive the exit");
+}
+
+#[tokio::test]
+async fn side_layout_spectrum_toggle_keeps_the_cover_art() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.layout = PlayLayout::Side;
+    let revision = state.style_revision;
+
+    state.update(raw_key(KeyCode::Char('v')), &fx);
+
+    assert!(state.config.spectrum_enabled);
+    assert_eq!(
+        state.style_revision, revision,
+        "the side layout hosts the spectrum in the panel; the cover must not reload"
+    );
+}
+
+#[tokio::test]
 async fn global_spectrum_key_toggles_and_persists_immediately() {
     let directory = tempfile::tempdir().unwrap();
     let fx = effects(&directory);

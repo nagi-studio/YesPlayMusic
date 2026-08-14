@@ -198,6 +198,21 @@ impl AppState {
             Action::Escape => {
                 if self.filter.is_active() {
                     self.clear_filter();
+                } else if self.view == View::Search
+                    && self.search.is_results()
+                    && !self.search.input
+                {
+                    // Esc keeps walking outward from the result list;
+                    // navigate_back would bounce focus back into the input
+                    // and Esc could never leave the view. h/Backspace keep
+                    // the step-back-into-input behavior.
+                    let selected = self
+                        .visible_row(self.selected)
+                        .map_or(self.selected, |(underlying, _)| underlying);
+                    self.search.remember_selection(selected);
+                    self.clear_filter();
+                    self.sidebar_focus = false;
+                    self.view = View::NowPlaying;
                 } else {
                     self.navigate_back(fx);
                 }
