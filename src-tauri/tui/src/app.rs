@@ -2052,9 +2052,10 @@ fn spawn_idle_load(fx: &Effects, path: std::path::PathBuf) {
     });
 }
 
-/// Idle art scales with the terminal like covers do.
+/// Idle art scales with the terminal like covers do, but stays a badge:
+/// past 18 rows the logo reads as a wall instead of a mark.
 fn desired_idle_cells((cols, rows): (u16, u16)) -> (u16, u16) {
-    let height = (rows * 2 / 5).clamp(12, 24);
+    let height = (rows * 2 / 5).clamp(12, 18);
     let width = (height * 2).min(cols.saturating_sub(4).max(16));
     (width, width / 2)
 }

@@ -181,16 +181,20 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
 fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
     let theme = &state.theme;
     let menu = menu_entries(state);
-    let menu_height = menu.len() as u16;
+    // One blank row between menu entries so the block can breathe; tight
+    // terminals fall back to the compact single-spaced list.
+    let airy = area.height >= state.idle_art.height + menu.len() as u16 * 2 + 6;
+    let row_stride: u16 = if airy { 2 } else { 1 };
+    let menu_height = (menu.len() as u16 - 1) * row_stride + 1;
     let art_height = state
         .idle_art
         .height
-        .min(area.height.saturating_sub(menu_height + 4));
+        .min(area.height.saturating_sub(menu_height + 5));
 
     let [_, art_area, _, menu_area, _, _, _] = Layout::vertical([
         Constraint::Fill(2),
         Constraint::Length(art_height),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Length(menu_height),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -205,7 +209,7 @@ fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hi
     for (index, (label, key, entry)) in menu.iter().enumerate() {
         let row = Rect {
             x: area.x + (area.width.saturating_sub(MENU_WIDTH)) / 2,
-            y: menu_area.y + index as u16,
+            y: menu_area.y + index as u16 * row_stride,
             width: MENU_WIDTH.min(area.width),
             height: 1,
         };
