@@ -378,6 +378,10 @@ pub struct AppState {
     /// Mirrors terminal mouse capture; the `mouse` palette command
     /// releases it so native text selection works.
     pub(crate) mouse_captured: bool,
+    /// Newer release tag found by the startup check, if any.
+    pub update_available: Option<String>,
+    /// Whether this binary lives in a Homebrew Cellar (decides the hint).
+    pub brew_install: bool,
     pub theme: Theme,
     pub(crate) terminal_background: Option<Color>,
     pub(crate) terminal_is_light: Option<bool>,
@@ -557,6 +561,8 @@ impl AppState {
             resume_on_play: None,
             dashboard_hold: false,
             mouse_captured: true,
+            update_available: None,
+            brew_install: crate::update::installed_via_brew(),
             seek_after_start: None,
             status: None,
             command_feedback: None,
@@ -2147,6 +2153,15 @@ async fn event_loop(
     spawn_resize_worker(playing_resize_rx, playing_responses_tx);
     spawn_resize_worker(selected_resize_rx, selected_responses_tx);
     spawn_resize_worker(selected_pending_resize_rx, selected_pending_responses_tx);
+
+    if config.update_check {
+        let update_tx = actions_tx.clone();
+        tokio::spawn(async move {
+            if let Some(tag) = crate::update::check(env!("CARGO_PKG_VERSION")).await {
+                let _ = update_tx.send(Action::UpdateAvailable(tag));
+            }
+        });
+    }
 
     let input_tx = actions_tx.clone();
     tokio::spawn(async move {

@@ -17,6 +17,7 @@ mod store;
 mod terminal_background;
 mod theme;
 mod ui;
+mod update;
 mod yrc;
 
 use anyhow::Result;

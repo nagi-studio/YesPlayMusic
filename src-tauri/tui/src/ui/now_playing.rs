@@ -205,7 +205,7 @@ fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hi
         .height
         .min(area.height.saturating_sub(menu_height + 5));
 
-    let [_, art_area, _, menu_area, _, _, _] = Layout::vertical([
+    let [_, art_area, _, menu_area, _, hint_area, _] = Layout::vertical([
         Constraint::Fill(2),
         Constraint::Length(art_height),
         Constraint::Length(2),
@@ -218,6 +218,14 @@ fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hi
 
     let art_rect = centered(art_area, state.idle_art.width, art_height);
     frame.render_widget(&state.idle_art, art_rect);
+
+    if let Some(version) = &state.update_available {
+        let hint = i18n::t_update_available(version, state.brew_install);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(hint, Style::new().fg(theme.dim)))).centered(),
+            hint_area,
+        );
+    }
 
     const MENU_WIDTH: u16 = 30;
     for (index, (label, key, entry)) in menu.iter().enumerate() {

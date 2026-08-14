@@ -84,6 +84,8 @@ pub struct Config {
     pub spectrum_enabled: bool,
     pub spectrum_style: SpectrumKind,
     pub spectrum_glow: bool,
+    /// Silent GitHub release check on startup; hints only, never self-updates.
+    pub update_check: bool,
 }
 
 pub struct LoadedConfig {
@@ -126,6 +128,7 @@ impl Default for Config {
             spectrum_enabled: false,
             spectrum_style: SpectrumKind::Blocks,
             spectrum_glow: false,
+            update_check: true,
         }
     }
 }
@@ -205,6 +208,7 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 # spectrum_enabled = false     # v 键也可全局开关
 # spectrum_style = "blocks"   # blocks | mirror | led | braille | shade | scope | fire | waterfall | vu | reflect
 # spectrum_glow = false        # 荧光余辉残影
+# update_check = true          # 启动时静默检查新版本
 "#;
 
 fn deserialize_language<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -443,6 +447,7 @@ mod tests {
                 spectrum_enabled: true,
                 spectrum_style: SpectrumKind::Fire,
                 spectrum_glow: true,
+                update_check: false,
             };
 
             let encoded = toml::to_string(&config).unwrap();

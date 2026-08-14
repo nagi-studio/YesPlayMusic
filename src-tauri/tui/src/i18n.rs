@@ -130,6 +130,7 @@ pub enum Key {
     CommandMouse,
     CommandGoto,
     CommandQuit,
+    SettingUpdateCheck,
     LabelLike,
     LabelHelp,
     Searching,
@@ -295,6 +296,17 @@ pub fn t_candidates_unavailable(keywords: &str) -> String {
     }
 }
 
+pub fn t_update_available(version: &str, brew: bool) -> String {
+    match (language(), brew) {
+        (Lang::Zh, true) => format!("新版本 {version} 可用 · brew upgrade ypm"),
+        (Lang::Zh, false) => format!("新版本 {version} 可用 · GitHub Releases 下载"),
+        (Lang::En, true) => format!("Update {version} available · brew upgrade ypm"),
+        (Lang::En, false) => format!("Update {version} available · download from GitHub Releases"),
+        (Lang::Ja, true) => format!("新バージョン {version} · brew upgrade ypm"),
+        (Lang::Ja, false) => format!("新バージョン {version} · GitHub Releases からダウンロード"),
+    }
+}
+
 pub fn t_command_executed(command: &str) -> String {
     match language() {
         Lang::Zh => format!("已执行命令：{command}"),
@@ -453,6 +465,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::CommandMouse => "鼠标捕获",
             Key::CommandGoto => "前往 <视图>",
             Key::CommandQuit => "退出",
+            Key::SettingUpdateCheck => "更新检测",
             Key::LabelLike => "收藏",
             Key::LabelHelp => "全部键位",
             Key::Searching => "搜索中…",
@@ -607,6 +620,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::CommandMouse => "Mouse capture",
             Key::CommandGoto => "Go to <view>",
             Key::CommandQuit => "Quit",
+            Key::SettingUpdateCheck => "Update check",
             Key::LabelLike => "Like",
             Key::LabelHelp => "All keys",
             Key::Searching => "Searching…",
@@ -761,6 +775,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::CommandMouse => "マウスキャプチャ",
             Key::CommandGoto => "移動 <ビュー>",
             Key::CommandQuit => "終了",
+            Key::SettingUpdateCheck => "更新チェック",
             Key::LabelLike => "お気に入り",
             Key::LabelHelp => "すべてのキー",
             Key::Searching => "検索中…",

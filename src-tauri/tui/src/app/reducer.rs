@@ -394,6 +394,7 @@ impl AppState {
             Action::SaveSettings => self.save_settings(fx),
             Action::CancelSettings => self.cancel_settings(fx),
             Action::NerdFontProbeFinished(status) => self.apply_nerd_font_probe(status),
+            Action::UpdateAvailable(tag) => self.update_available = Some(tag),
             Action::LikedIds { session, ids } => self.apply_liked_ids(session, ids),
             Action::FmMore { session, rows } => self.apply_fm_more(fx, session, rows),
             Action::FmLoadFailed { session, message } => {
