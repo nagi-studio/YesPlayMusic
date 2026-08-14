@@ -230,7 +230,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     }
 
     if state.command_palette.open {
-        command_palette::dim_background(frame, state.theme.faint);
+        command_palette::dim_background(frame, &state.theme);
         command_palette::draw(frame, state, area);
     }
 }

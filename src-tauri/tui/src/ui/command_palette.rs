@@ -12,10 +12,41 @@ use super::{panel_block, scroll_offset, text};
 pub(crate) const WIDTH: u16 = 60;
 const MAX_HEIGHT: u16 = 20;
 
-pub(crate) fn dim_background(frame: &mut Frame, faint: ratatui::style::Color) {
+/// Scrim behind the modal. Pixel-art cells carry image data in BOTH fg and
+/// bg, so dimming must pull each channel toward the theme background;
+/// overwriting fg alone shatters covers into speckle noise. Non-RGB colors
+/// (e.g. the transparent theme's Reset background) keep the legacy
+/// faint-foreground treatment.
+pub(crate) fn dim_background(frame: &mut Frame, theme: &crate::theme::Theme) {
     for cell in &mut frame.buffer_mut().content {
-        cell.fg = faint;
+        match (mix_toward(cell.fg, theme.bg), mix_toward(cell.bg, theme.bg)) {
+            (Some(fg), bg) => {
+                cell.fg = fg;
+                if let Some(bg) = bg {
+                    cell.bg = bg;
+                }
+            }
+            _ => cell.fg = theme.faint,
+        }
     }
+}
+
+/// Keep 40% of the color, sink 60% into the base.
+fn mix_toward(
+    color: ratatui::style::Color,
+    base: ratatui::style::Color,
+) -> Option<ratatui::style::Color> {
+    use ratatui::style::Color;
+    let (Color::Rgb(red, green, blue), Color::Rgb(base_red, base_green, base_blue)) = (color, base)
+    else {
+        return None;
+    };
+    let mix = |channel: u8, base: u8| ((u16::from(channel) * 2 + u16::from(base) * 3) / 5) as u8;
+    Some(Color::Rgb(
+        mix(red, base_red),
+        mix(green, base_green),
+        mix(blue, base_blue),
+    ))
 }
 
 pub(crate) fn draw(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -169,7 +200,7 @@ mod tests {
 
         assert_eq!(buffer[(modal_x, modal_y)].symbol(), "╭");
         assert_eq!(buffer[(modal_x + WIDTH - 1, modal_y)].symbol(), "╮");
-        assert_eq!(buffer[(0, 0)].fg, state.theme.faint);
+        assert_ne!(buffer[(0, 0)].fg, state.theme.fg, "shell text is scrimmed");
         let title_start = i18n::t(Key::CommandPalette)
             .chars()
             .next()
@@ -179,6 +210,43 @@ mod tests {
             .find(|x| buffer[(*x, modal_y)].symbol() == title_start)
             .unwrap();
         assert_eq!(buffer[(title_x, modal_y)].fg, state.theme.accent);
+    }
+
+    #[test]
+    fn scrim_dims_pixel_cells_in_both_channels_instead_of_flattening_fg() {
+        use ratatui::style::Color;
+
+        let theme = crate::theme::Theme::db16();
+        let backend = TestBackend::new(4, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let pixel = frame.buffer_mut().cell_mut((0, 0)).unwrap();
+                pixel
+                    .set_fg(Color::Rgb(200, 100, 50))
+                    .set_bg(Color::Rgb(20, 40, 60));
+                dim_background(frame, &theme);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let Color::Rgb(base_red, base_green, base_blue) = theme.bg else {
+            panic!("db16 background must be RGB");
+        };
+        let mix =
+            |channel: u8, base: u8| ((u16::from(channel) * 2 + u16::from(base) * 3) / 5) as u8;
+        assert_eq!(
+            buffer[(0, 0)].fg,
+            Color::Rgb(mix(200, base_red), mix(100, base_green), mix(50, base_blue)),
+            "pixel foreground blends toward the theme background"
+        );
+        assert_eq!(
+            buffer[(0, 0)].bg,
+            Color::Rgb(mix(20, base_red), mix(40, base_green), mix(60, base_blue)),
+            "pixel background dims too, keeping the mosaic coherent"
+        );
+        // Untouched default cells (Reset fg) keep the legacy faint scrim.
+        assert_eq!(buffer[(1, 0)].fg, theme.faint);
     }
 
     #[test]
@@ -222,7 +290,7 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[((80 - WIDTH) / 2, 0)].symbol(), "╭");
-        assert_eq!(buffer[(0, 0)].fg, state.theme.faint);
+        assert_ne!(buffer[(0, 0)].fg, state.theme.fg, "shell text is scrimmed");
 
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
