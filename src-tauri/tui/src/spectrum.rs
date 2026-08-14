@@ -532,10 +532,12 @@ fn reflection_color(main: Color, theme: &Theme, terminal_background: Option<Colo
     )
 }
 
-fn reflection_brick_visible(tick: u64, index: usize, distance: u16) -> bool {
-    let mut hash = tick
-        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        .wrapping_add((index as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9))
+// Deliberately time-independent: hashing the frame counter made ~1 in 5
+// reflection bricks blink every frame, which read as flicker instead of
+// water. The ripple pattern is now a stable dither over (column, depth).
+fn reflection_brick_visible(index: usize, distance: u16) -> bool {
+    let mut hash = (index as u64)
+        .wrapping_mul(0xbf58_476d_1ce4_e5b9)
         .wrapping_add(u64::from(distance).wrapping_mul(0x94d0_49bb_1331_11eb));
     hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -1041,7 +1043,6 @@ impl Vu {
 
 #[derive(Default)]
 struct Reflect {
-    tick: u64,
     terminal_background: Option<Color>,
 }
 
@@ -1058,8 +1059,9 @@ impl SpectrumStyle for Reflect {
         buf: &mut Buffer,
         theme: &Theme,
     ) {
-        self.tick = self.tick.wrapping_add(1);
-        let line = area.height / 2;
+        // Bars get two thirds of the area, the reflection one third, so
+        // the band reads as anchored to its bottom edge (the cover's).
+        let line = area.height.saturating_mul(2) / 3;
         let ramp = Ramp::new(theme);
         for x in 0..area.width {
             put(buf, area, x, line, "─", theme.faint, theme.bg);
@@ -1074,7 +1076,7 @@ impl SpectrumStyle for Reflect {
                 draw_brick_bar(buf, area, index as u16 * BRICK_STRIDE, value, line, theme);
             let reflected = main_height.div_ceil(2);
             for distance in 0..reflected.min(area.height.saturating_sub(line + 1)) {
-                if reflection_brick_visible(self.tick, index, distance) {
+                if reflection_brick_visible(index, distance) {
                     let source_row = (distance * 2).min(main_height.saturating_sub(1));
                     let color = reflection_color(
                         brick_row_color(ramp, source_row, line),
@@ -1428,7 +1430,8 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        let line = 4;
+        // Bars own two thirds of the area: mirror line at 9 * 2 / 3.
+        let line = 6;
         assert!((0..12).all(|x| buffer[(x, line)].symbol() == "─"));
         assert!((0..12).all(|x| buffer[(x, line)].fg == theme.faint));
         assert!((0..line).any(|y| buffer[(0, y)].symbol() == "▆"));

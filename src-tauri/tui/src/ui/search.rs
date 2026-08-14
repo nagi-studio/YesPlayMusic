@@ -138,6 +138,15 @@ fn draw_input(frame: &mut Frame, state: &AppState, area: Rect) {
     let theme = &state.theme;
     let icons = crate::icons::for_style(state.config.icons);
     let cursor = if state.search.input { "▎" } else { "" };
+    if state.search.input {
+        // Park the real terminal cursor on the caret so IME candidate
+        // windows anchor to the input point instead of drifting.
+        let prefix = super::text::display_width(icons.search)
+            + 1
+            + super::text::display_width(&state.search.query);
+        let x = area.x + (prefix as u16).min(area.width.saturating_sub(1));
+        frame.set_cursor_position((x, area.y));
+    }
     let query_style = if state.search.input {
         Style::new().fg(theme.fg)
     } else {

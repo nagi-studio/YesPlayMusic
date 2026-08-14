@@ -904,8 +904,11 @@ async fn restored_playback_stays_paused_until_space_then_seeks_after_start() {
         state.now.as_ref().map(|now| now.album.as_str()),
         Some("Album")
     );
+    // A restored session parks on the dashboard until the user engages.
+    assert!(state.dashboard_hold);
 
     state.update(Action::TogglePlay, &fx);
+    assert!(!state.dashboard_hold, "space reveals the player");
     assert_eq!(state.generation, 1);
     assert_eq!(state.position, Duration::from_secs(42));
     assert_eq!(state.status.as_deref(), Some(i18n::t(Key::Resolving)));

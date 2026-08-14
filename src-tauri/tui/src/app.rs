@@ -372,6 +372,12 @@ impl HotPixelCovers {
 pub struct AppState {
     pub view: View,
     pub zen: bool,
+    /// Restored sessions land on the dashboard first; the now-playing
+    /// layout appears once the user actually engages with playback.
+    pub dashboard_hold: bool,
+    /// Mirrors terminal mouse capture; the `mouse` palette command
+    /// releases it so native text selection works.
+    pub(crate) mouse_captured: bool,
     pub theme: Theme,
     pub(crate) terminal_background: Option<Color>,
     pub(crate) terminal_is_light: Option<bool>,
@@ -549,6 +555,8 @@ impl AppState {
             volume: 1.0,
             volume_before_mute: None,
             resume_on_play: None,
+            dashboard_hold: false,
+            mouse_captured: true,
             seek_after_start: None,
             status: None,
             command_feedback: None,
@@ -859,6 +867,8 @@ impl AppState {
                 album: row.album.clone(),
             });
             self.resume_on_play = Some(self.position);
+            // Land on the dashboard; 1/Space/next reveal the player.
+            self.dashboard_hold = true;
         } else {
             self.current_track_id = None;
             self.duration = None;
@@ -869,6 +879,7 @@ impl AppState {
     }
 
     fn toggle_play(&mut self, fx: &Effects) {
+        self.dashboard_hold = false;
         let Some(position) = self.resume_on_play else {
             fx.player.send(PlayerCommand::TogglePause);
             return;
@@ -1305,6 +1316,7 @@ impl AppState {
     /// Reset the now-playing surface and kick off resolution for a row.
     fn play_row(&mut self, fx: &Effects, row: SongRow) {
         fx.player.send(PlayerCommand::Stop);
+        self.dashboard_hold = false;
         self.current_track_id = (row.id > 0).then_some(row.id);
         self.active_row = Some(row.clone());
         self.paused = false;

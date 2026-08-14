@@ -17,6 +17,7 @@ enum CommandKind {
     Volume,
     Theme,
     Quality,
+    Mouse,
     Goto,
     Quit,
 }
@@ -109,6 +110,12 @@ const COMMANDS: &[CommandSpec] = &[
         keywords: &["quality", "音质", "品质"],
     },
     CommandSpec {
+        kind: CommandKind::Mouse,
+        usage: "mouse",
+        aliases: "鼠标捕获",
+        keywords: &["mouse", "select", "copy", "鼠标", "选择", "复制"],
+    },
+    CommandSpec {
         kind: CommandKind::Goto,
         usage: "goto <view>",
         aliases: "前往 <视图>",
@@ -137,6 +144,7 @@ pub(crate) enum CommandInvocation {
     Volume(u8),
     Theme(String),
     Quality(AudioQuality),
+    Mouse,
     Goto(View),
     Quit,
 }
@@ -157,6 +165,7 @@ impl CommandInvocation {
             Self::Volume(_) => "volume",
             Self::Theme(_) => "theme",
             Self::Quality(_) => "quality",
+            Self::Mouse => "mouse",
             Self::Goto(_) => "goto",
             Self::Quit => "quit",
         }
@@ -347,6 +356,7 @@ fn invocation_for(
         CommandKind::Zen => no_arguments(spec, arguments, CommandInvocation::Zen),
         CommandKind::Spectrum => no_arguments(spec, arguments, CommandInvocation::Spectrum),
         CommandKind::Mute => no_arguments(spec, arguments, CommandInvocation::Mute),
+        CommandKind::Mouse => no_arguments(spec, arguments, CommandInvocation::Mouse),
         CommandKind::Quit => no_arguments(spec, arguments, CommandInvocation::Quit),
         CommandKind::Seek => {
             let value = one_argument(spec, arguments, "<±seconds>")?;

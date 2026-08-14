@@ -31,9 +31,11 @@ const MAX_LYRIC_CONTEXT_ROWS: usize = 9;
 pub(crate) const SIDE_PANEL_RESERVED_COLS: u16 = 46;
 const SIDE_PANEL_GAP_ROWS: u16 = 1;
 const SIDE_PANEL_MIN_SPECTRUM_ROWS: u16 = 4;
-/// Lyric rows shown next to the spectrum: three pairs keeps the current
-/// line readable without turning the panel into a lyrics wall.
-const SIDE_PANEL_LYRIC_PAIRS: u16 = 3;
+/// Lyrics take ~40% of the panel rows left after the meta block (bounded
+/// below and above), the spectrum absorbs the rest down to the cover's
+/// bottom edge. Tall terminals get more context lines AND a taller band.
+const SIDE_PANEL_MIN_LYRIC_ROWS: u16 = 3;
+const SIDE_PANEL_MAX_LYRIC_ROWS: u16 = 12;
 
 /// The bottom spectrum band only exists in the stacked layout; the side
 /// layout hosts the spectrum inside the right panel, bottom-aligned with
@@ -56,7 +58,7 @@ pub(crate) fn spectrum_band_height(
 }
 
 /// Rows the side panel can spare for the spectrum once the meta block and
-/// the capped lyric window are budgeted. Zero hides the panel spectrum.
+/// the adaptive lyric window are budgeted. Zero hides the panel spectrum.
 fn side_panel_spectrum_rows(state: &AppState, panel_height: u16) -> u16 {
     if !state.config.spectrum_enabled {
         return 0;
@@ -69,12 +71,11 @@ fn side_panel_spectrum_rows(state: &AppState, panel_height: u16) -> u16 {
         text_rows += 1;
     }
     if !state.lyrics.is_empty() {
-        let translated = state
-            .lyrics
-            .iter()
-            .any(|line| line.translation.as_ref().is_some_and(|t| !t.is_empty()));
-        let pair_rows = if translated { 2 } else { 1 };
-        text_rows += 1 + SIDE_PANEL_LYRIC_PAIRS * pair_rows;
+        let available = panel_height.saturating_sub(text_rows + 1 + SIDE_PANEL_GAP_ROWS);
+        let lyric_rows = (available * 2 / 5)
+            .clamp(SIDE_PANEL_MIN_LYRIC_ROWS, SIDE_PANEL_MAX_LYRIC_ROWS)
+            .min(available);
+        text_rows += 1 + lyric_rows;
     } else if state.status.is_some() {
         text_rows += 2;
     }
@@ -87,7 +88,7 @@ fn side_panel_spectrum_rows(state: &AppState, panel_height: u16) -> u16 {
 }
 
 pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits) {
-    if state.now.is_none() {
+    if state.now.is_none() || state.dashboard_hold {
         draw_dashboard(frame, state, area, hits);
         return;
     }

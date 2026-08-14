@@ -174,6 +174,9 @@ impl AppState {
             Action::MoveCommandSelection(delta) => self.command_palette.move_selection(delta),
             Action::ExecuteCommand => self.execute_command_palette(fx),
             Action::SwitchView(view) => {
+                if view == View::NowPlaying {
+                    self.dashboard_hold = false;
+                }
                 if self.view == View::Search {
                     let selected = self
                         .visible_row(self.selected)
@@ -221,6 +224,7 @@ impl AppState {
                 self.zen = !self.zen;
                 if self.zen {
                     self.view = View::NowPlaying;
+                    self.dashboard_hold = false;
                 }
             }
             Action::ToggleSpectrum => {
@@ -837,6 +841,17 @@ impl AppState {
             CommandInvocation::Volume(percent) => {
                 self.update(Action::SetVolumeTo(f32::from(percent) / 100.0), fx);
                 Ok(())
+            }
+            CommandInvocation::Mouse => {
+                // Releasing capture hands the mouse back to the terminal:
+                // native drag-selection and copy-on-select work again.
+                self.mouse_captured = !self.mouse_captured;
+                let toggled = if self.mouse_captured {
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+                } else {
+                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+                };
+                toggled.map_err(|error| error.to_string())
             }
             CommandInvocation::Theme(theme) => self.set_command_theme(fx, &theme),
             CommandInvocation::Quality(quality) => self.set_command_quality(fx, quality),

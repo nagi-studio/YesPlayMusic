@@ -107,6 +107,9 @@ pub(crate) fn draw(frame: &mut Frame, state: &AppState, area: Rect) {
 
 fn draw_input(frame: &mut Frame, state: &AppState, area: Rect) {
     let theme = &state.theme;
+    // Anchor IME candidate windows to the caret via the real cursor.
+    let caret = 2 + text::display_width(&state.command_palette.query) as u16;
+    frame.set_cursor_position((area.x + caret.min(area.width.saturating_sub(1)), area.y));
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(": ", Style::new().fg(theme.accent)),
