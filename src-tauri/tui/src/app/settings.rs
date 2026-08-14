@@ -164,9 +164,10 @@ impl AppState {
         if self.view != View::Settings {
             return;
         }
-        let last = SettingField::ALL.len() as i32 - 1;
+        // Wrap around: up from the first row lands on the last and back.
+        let count = SettingField::ALL.len() as i32;
         self.settings.selected =
-            (self.settings.selected as i32 + delta.signum()).clamp(0, last) as usize;
+            (self.settings.selected as i32 + delta.signum()).rem_euclid(count) as usize;
     }
 
     pub(crate) fn adjust_setting(&mut self, fx: &Effects, delta: i32) {
