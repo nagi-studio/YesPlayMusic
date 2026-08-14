@@ -65,16 +65,31 @@ fn newer_release(current: &str, releases: &[Release]) -> Option<String> {
         .map(|(_, tag)| tag)
 }
 
-/// One quiet request; any failure means "no news".
+/// One quiet request; any failure means "no news". Stable builds ask the
+/// dedicated `latest` endpoint (prereleases can crowd a page of the plain
+/// list and hide the newest stable); canary builds scan the recent list.
 pub(crate) async fn check(current: &'static str) -> Option<String> {
+    let current_version = parse_version(current)?;
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent(concat!("ypm/", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
-    let body = client
-        .get(RELEASES_URL)
-        .query(&[("per_page", "15")])
+    if current_version.stable {
+        let body = fetch(&client, &format!("{RELEASES_URL}/latest")).await?;
+        let release: Release = serde_json::from_str(&body).ok()?;
+        let version = parse_version(&release.tag_name)?;
+        (version > current_version).then_some(release.tag_name)
+    } else {
+        let body = fetch(&client, &format!("{RELEASES_URL}?per_page=15")).await?;
+        let releases: Vec<Release> = serde_json::from_str(&body).ok()?;
+        newer_release(current, &releases)
+    }
+}
+
+async fn fetch(client: &reqwest::Client, url: &str) -> Option<String> {
+    client
+        .get(url)
         .send()
         .await
         .ok()?
@@ -82,9 +97,7 @@ pub(crate) async fn check(current: &'static str) -> Option<String> {
         .ok()?
         .text()
         .await
-        .ok()?;
-    let releases: Vec<Release> = serde_json::from_str(&body).ok()?;
-    newer_release(current, &releases)
+        .ok()
 }
 
 /// Homebrew keg installs live under a Cellar path; that decides whether

@@ -394,7 +394,12 @@ impl AppState {
             Action::SaveSettings => self.save_settings(fx),
             Action::CancelSettings => self.cancel_settings(fx),
             Action::NerdFontProbeFinished(status) => self.apply_nerd_font_probe(status),
-            Action::UpdateAvailable(tag) => self.update_available = Some(tag),
+            Action::UpdateAvailable(tag) => {
+                // Also surface as a status toast: a late-arriving result
+                // must stay visible after the dashboard has been left.
+                self.status = Some(crate::i18n::t_update_available(&tag, self.brew_install));
+                self.update_available = Some(tag);
+            }
             Action::LikedIds { session, ids } => self.apply_liked_ids(session, ids),
             Action::FmMore { session, rows } => self.apply_fm_more(fx, session, rows),
             Action::FmLoadFailed { session, message } => {
