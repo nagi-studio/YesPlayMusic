@@ -19,11 +19,13 @@ const IDLE_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
 // After a drain barrier completes, sweep briefly until the line is quiet
-// so stale replies from earlier probers cannot leak past the barrier.
+// so stale replies from earlier probers cannot leak past the barrier. The
+// cap must exceed FIRST_BYTE_TIMEOUT: a dirty barrier waits that long for
+// its own delayed reply before the quiet check takes over.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const QUIET_WINDOW: Duration = Duration::from_millis(150);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const QUIET_SWEEP_CAP: Duration = Duration::from_secs(1);
+const QUIET_SWEEP_CAP: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Appearance {
@@ -225,9 +227,21 @@ mod platform {
         // out Picker query) can satisfy the barrier before the reply to
         // OUR query arrives. After the barrier, keep sweeping until the
         // line goes quiet so no reply survives into the event stream.
-        if transact(DA1_QUERY).is_none() {
+        let Some(response) = transact(DA1_QUERY) else {
             return;
-        }
+        };
+        // A buffer that is exactly one DA1 reply and nothing else is ours:
+        // stale probe leftovers (kitty/OSC/cell-size replies) would precede
+        // it. When leftovers are present, our own reply may still be queued
+        // behind them on a busy multiplexer, so sweep with the full
+        // first-byte patience instead of a short quiet check.
+        let clean = find_da1_end(&response) == Some(response.len())
+            && (response.starts_with(b"\x1b[?") || response.starts_with(&[0x9b]));
+        let mut patience = if clean {
+            QUIET_WINDOW
+        } else {
+            FIRST_BYTE_TIMEOUT
+        };
         let mut stdin = ManuallyDrop::new(unsafe { File::from_raw_fd(STDIN_FD) });
         let deadline = Instant::now() + QUIET_SWEEP_CAP;
         loop {
@@ -237,8 +251,9 @@ mod platform {
             else {
                 return;
             };
-            match wait_readable(STDIN_FD, QUIET_WINDOW.min(remaining)) {
+            match wait_readable(STDIN_FD, patience.min(remaining)) {
                 Ok(true) => {
+                    patience = QUIET_WINDOW;
                     let mut byte = [0];
                     match stdin.read(&mut byte) {
                         Ok(1) => {}

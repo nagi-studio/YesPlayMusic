@@ -45,13 +45,14 @@ pub(crate) fn spectrum_band_height(
     total_height: u16,
     enabled: bool,
     layout: crate::app::PlayLayout,
+    progress_rows: u16,
 ) -> u16 {
     if !enabled || matches!(layout, crate::app::PlayLayout::Side) {
         return 0;
     }
     let candidate =
         (total_height / 5).clamp(STACKED_SPECTRUM_MIN_HEIGHT, STACKED_SPECTRUM_MAX_HEIGHT);
-    if total_height.saturating_sub(PROGRESS_HEIGHT + candidate) < STACKED_MIN_MAIN_HEIGHT {
+    if total_height.saturating_sub(progress_rows + candidate) < STACKED_MIN_MAIN_HEIGHT {
         0
     } else {
         candidate
@@ -94,10 +95,14 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
         return;
     }
 
-    let spectrum_height =
-        spectrum_band_height(area.height, state.config.spectrum_enabled, state.layout);
     // Zen strips the last chrome: no progress bar, keys keep working.
     let progress_height = if state.zen { 0 } else { PROGRESS_HEIGHT };
+    let spectrum_height = spectrum_band_height(
+        area.height,
+        state.config.spectrum_enabled,
+        state.layout,
+        progress_height,
+    );
     // One breather row keeps the cover/spectrum off the progress bar
     // whenever the terminal can spare it.
     let breather = u16::from(area.height >= MAIN_BREATHER_MIN_HEIGHT && progress_height > 0);
@@ -783,12 +788,36 @@ mod tests {
 
     #[test]
     fn bottom_spectrum_band_is_stacked_only() {
-        assert_eq!(spectrum_band_height(20, true, PlayLayout::Side), 0);
-        assert_eq!(spectrum_band_height(56, true, PlayLayout::Side), 0);
-        assert_eq!(spectrum_band_height(20, true, PlayLayout::Stacked), 0);
-        assert_eq!(spectrum_band_height(36, true, PlayLayout::Stacked), 7);
-        assert_eq!(spectrum_band_height(56, true, PlayLayout::Stacked), 8);
-        assert_eq!(spectrum_band_height(56, false, PlayLayout::Stacked), 0);
+        assert_eq!(
+            spectrum_band_height(20, true, PlayLayout::Side, PROGRESS_HEIGHT),
+            0
+        );
+        assert_eq!(
+            spectrum_band_height(56, true, PlayLayout::Side, PROGRESS_HEIGHT),
+            0
+        );
+        assert_eq!(
+            spectrum_band_height(20, true, PlayLayout::Stacked, PROGRESS_HEIGHT),
+            0
+        );
+        assert_eq!(
+            spectrum_band_height(36, true, PlayLayout::Stacked, PROGRESS_HEIGHT),
+            7
+        );
+        // Zen frees the progress rows, letting tight terminals keep the band.
+        assert_eq!(spectrum_band_height(22, true, PlayLayout::Stacked, 0), 4);
+        assert_eq!(
+            spectrum_band_height(22, true, PlayLayout::Stacked, PROGRESS_HEIGHT),
+            0
+        );
+        assert_eq!(
+            spectrum_band_height(56, true, PlayLayout::Stacked, PROGRESS_HEIGHT),
+            8
+        );
+        assert_eq!(
+            spectrum_band_height(56, false, PlayLayout::Stacked, PROGRESS_HEIGHT),
+            0
+        );
 
         let config = Config {
             spectrum_enabled: true,
@@ -813,7 +842,9 @@ mod tests {
 
         let rows = mirror_rows(terminal.backend().buffer(), 0..80, 40);
         assert_eq!(rows.len(), 1, "one full-width reflect mirror line");
-        let band_top = 40 - PROGRESS_HEIGHT - spectrum_band_height(40, true, PlayLayout::Stacked);
+        let band_top = 40
+            - PROGRESS_HEIGHT
+            - spectrum_band_height(40, true, PlayLayout::Stacked, PROGRESS_HEIGHT);
         assert!(rows[0] >= band_top && rows[0] < 40 - PROGRESS_HEIGHT);
     }
 

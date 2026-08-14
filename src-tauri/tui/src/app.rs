@@ -593,19 +593,26 @@ impl AppState {
             ui::HEADER_HEIGHT + ui::FOOTER_HEIGHT + ui::PANEL_GAP_Y * 2
         };
         let playing_rows = rows.saturating_sub(shell_rows);
-        let spectrum_rows = ui::now_playing::spectrum_band_height(
-            playing_rows,
-            self.config.spectrum_enabled,
-            self.layout,
-        );
         let progress_rows = if self.zen {
             0
         } else {
             ui::now_playing::PROGRESS_HEIGHT
         };
+        let spectrum_rows = ui::now_playing::spectrum_band_height(
+            playing_rows,
+            self.config.spectrum_enabled,
+            self.layout,
+            progress_rows,
+        );
+        // Mirror the draw-side breather row exactly, or the cover art is
+        // rendered one row taller than its slot and gets bottom-cropped.
+        let breather = u16::from(
+            playing_rows >= ui::now_playing::MAIN_BREATHER_MIN_HEIGHT && progress_rows > 0,
+        );
         let main_rows = playing_rows
             .saturating_sub(progress_rows)
-            .saturating_sub(spectrum_rows);
+            .saturating_sub(spectrum_rows)
+            .saturating_sub(breather);
         let height = match self.layout {
             PlayLayout::Side => main_rows,
             PlayLayout::Stacked => main_rows / 2,

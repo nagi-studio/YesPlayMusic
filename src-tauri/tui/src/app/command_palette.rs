@@ -288,9 +288,13 @@ fn filtered_commands(token: &str) -> Vec<&'static CommandSpec> {
         .iter()
         .enumerate()
         .filter_map(|(index, command)| {
+            // The alias shown by the UI follows the locale; whatever the
+            // user reads on screen must also be typeable.
             command
                 .keywords
                 .iter()
+                .copied()
+                .chain(std::iter::once(crate::i18n::t(command.alias)))
                 .filter_map(|keyword| fuzzy_score(token, keyword))
                 .min()
                 .map(|score| (score, index, command))
@@ -305,6 +309,8 @@ fn command_for_keyword(token: &str) -> Option<&'static CommandSpec> {
         command
             .keywords
             .iter()
+            .copied()
+            .chain(std::iter::once(crate::i18n::t(command.alias)))
             .any(|keyword| keyword.eq_ignore_ascii_case(token))
     })
 }

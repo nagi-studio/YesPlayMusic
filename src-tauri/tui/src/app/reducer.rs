@@ -338,9 +338,13 @@ impl AppState {
                 }
             }
             Action::NextTrack => {
+                // Reveal the player even when the queue cannot advance,
+                // or the resulting status stays hidden behind the dashboard.
+                self.dashboard_hold = false;
                 self.step_queue(fx, 1, false, true);
             }
             Action::PrevTrack => {
+                self.dashboard_hold = false;
                 self.step_queue(fx, -1, false, true);
             }
             Action::ToggleHelp => self.show_help = true,
