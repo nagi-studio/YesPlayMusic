@@ -598,8 +598,13 @@ impl AppState {
             self.config.spectrum_enabled,
             self.layout,
         );
+        let progress_rows = if self.zen {
+            0
+        } else {
+            ui::now_playing::PROGRESS_HEIGHT
+        };
         let main_rows = playing_rows
-            .saturating_sub(ui::now_playing::PROGRESS_HEIGHT)
+            .saturating_sub(progress_rows)
             .saturating_sub(spectrum_rows);
         let height = match self.layout {
             PlayLayout::Side => main_rows,

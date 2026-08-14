@@ -20,6 +20,7 @@ use crate::ui::{format_duration, Hits};
 // border reads as a stretched rectangle.
 const COVER_GRID: (u16, u16) = (26, 13);
 pub(crate) const PROGRESS_HEIGHT: u16 = 2;
+pub(crate) const MAIN_BREATHER_MIN_HEIGHT: u16 = 12;
 const STACKED_SPECTRUM_MIN_HEIGHT: u16 = 4;
 const STACKED_SPECTRUM_MAX_HEIGHT: u16 = 8;
 const STACKED_MIN_MAIN_HEIGHT: u16 = 18;
@@ -95,10 +96,16 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
 
     let spectrum_height =
         spectrum_band_height(area.height, state.config.spectrum_enabled, state.layout);
-    let [main, spectrum_area, progress_area] = Layout::vertical([
+    // Zen strips the last chrome: no progress bar, keys keep working.
+    let progress_height = if state.zen { 0 } else { PROGRESS_HEIGHT };
+    // One breather row keeps the cover/spectrum off the progress bar
+    // whenever the terminal can spare it.
+    let breather = u16::from(area.height >= MAIN_BREATHER_MIN_HEIGHT && progress_height > 0);
+    let [main, _, spectrum_area, progress_area] = Layout::vertical([
         Constraint::Min(0),
+        Constraint::Length(breather),
         Constraint::Length(spectrum_height),
-        Constraint::Length(PROGRESS_HEIGHT),
+        Constraint::Length(progress_height),
     ])
     .areas(area);
     let progress_hits = progress_area;
@@ -173,7 +180,9 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
             &state.theme,
         );
     }
-    draw_progress(frame, state, progress_hits, hits);
+    if progress_height > 0 {
+        draw_progress(frame, state, progress_hits, hits);
+    }
 }
 
 // ── idle dashboard ──────────────────────────────────────────────────

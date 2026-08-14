@@ -485,6 +485,9 @@ const BRICK_GLYPH: &str = "▆";
 const BRICK_WIDTH: u16 = 2;
 const BRICK_STRIDE: u16 = 3;
 const REFLECTION_BACKGROUND_WEIGHT: f32 = 0.62;
+// The deepest reflection row sinks this far through the remaining
+// contrast; 1.0 would dissolve it into the background entirely.
+const REFLECTION_FADE_RANGE: f32 = 0.8;
 
 fn brick_count(width: u16) -> usize {
     usize::from(width.saturating_add(1) / BRICK_STRIDE).max(1)
@@ -523,26 +526,17 @@ fn draw_brick_bar(
     filled.min(height)
 }
 
-fn reflection_color(main: Color, theme: &Theme, terminal_background: Option<Color>) -> Color {
-    mix_with_background(
-        main,
-        theme,
-        terminal_background,
-        REFLECTION_BACKGROUND_WEIGHT,
-    )
-}
-
-// Deliberately time-independent: hashing the frame counter made ~1 in 5
-// reflection bricks blink every frame, which read as flicker instead of
-// water. The ripple pattern is now a stable dither over (column, depth).
-fn reflection_brick_visible(index: usize, distance: u16) -> bool {
-    let mut hash = (index as u64)
-        .wrapping_mul(0xbf58_476d_1ce4_e5b9)
-        .wrapping_add(u64::from(distance).wrapping_mul(0x94d0_49bb_1331_11eb));
-    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    hash ^= hash >> 31;
-    hash % 100 >= 18
+/// Reflections stay contiguous — no punched-out bricks — and read as
+/// water because they sink deeper into the background with distance.
+fn reflection_color(
+    main: Color,
+    theme: &Theme,
+    terminal_background: Option<Color>,
+    fade: f32,
+) -> Color {
+    let weight = REFLECTION_BACKGROUND_WEIGHT
+        + (1.0 - REFLECTION_BACKGROUND_WEIGHT) * REFLECTION_FADE_RANGE * fade.clamp(0.0, 1.0);
+    mix_with_background(main, theme, terminal_background, weight)
 }
 
 fn draw_eighth_bar(
@@ -1074,24 +1068,26 @@ impl SpectrumStyle for Reflect {
             let value = bin_value(bins, index, count);
             let main_height =
                 draw_brick_bar(buf, area, index as u16 * BRICK_STRIDE, value, line, theme);
-            let reflected = main_height.div_ceil(2);
-            for distance in 0..reflected.min(area.height.saturating_sub(line + 1)) {
-                if reflection_brick_visible(index, distance) {
-                    let source_row = (distance * 2).min(main_height.saturating_sub(1));
-                    let color = reflection_color(
-                        brick_row_color(ramp, source_row, line),
-                        theme,
-                        self.terminal_background,
-                    );
-                    draw_brick(
-                        buf,
-                        area,
-                        index as u16 * BRICK_STRIDE,
-                        line + 1 + distance,
-                        color,
-                        theme.bg,
-                    );
-                }
+            let reflected = main_height
+                .div_ceil(2)
+                .min(area.height.saturating_sub(line + 1));
+            for distance in 0..reflected {
+                let source_row = (distance * 2).min(main_height.saturating_sub(1));
+                let fade = f32::from(distance) / f32::from(reflected.max(1));
+                let color = reflection_color(
+                    brick_row_color(ramp, source_row, line),
+                    theme,
+                    self.terminal_background,
+                    fade,
+                );
+                draw_brick(
+                    buf,
+                    area,
+                    index as u16 * BRICK_STRIDE,
+                    line + 1 + distance,
+                    color,
+                    theme.bg,
+                );
             }
         }
     }
@@ -1477,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn reflect_sparkle_is_repeatable_and_transparent_safe() {
+    fn reflect_reflection_is_contiguous_and_transparent_safe() {
         let render = || {
             let theme = Theme::by_name("transparent");
             let backend = TestBackend::new(42, 10);
@@ -1501,19 +1497,21 @@ mod tests {
         let second = render();
         assert_eq!(first, second);
 
+        // The reflection is contiguous — every brick position below the
+        // mirror is filled, no punched-out holes — and transparent themes
+        // fall back to the faint color.
         let theme = Theme::by_name("transparent");
-        let reflection = (6..=8).flat_map(|y| {
+        let reflection = (7..=8).flat_map(|y| {
             let buffer = &first;
             (0..42)
                 .filter(|x| x % BRICK_STRIDE < BRICK_WIDTH)
                 .map(move |x| &buffer[(x, y)])
         });
         let cells = reflection.collect::<Vec<_>>();
-        assert!(cells.iter().any(|cell| cell.symbol() == BRICK_GLYPH));
-        assert!(cells.iter().any(|cell| cell.symbol() == " "));
+        assert!(!cells.is_empty());
+        assert!(cells.iter().all(|cell| cell.symbol() == BRICK_GLYPH));
         assert!(cells
             .iter()
-            .filter(|cell| cell.symbol() == BRICK_GLYPH)
             .all(|cell| cell.fg == theme.faint && cell.fg != Color::Reset));
     }
 
@@ -1522,13 +1520,20 @@ mod tests {
         let mut theme = Theme::db16();
         theme.bg = Color::Rgb(20, 30, 40);
         assert_eq!(
-            reflection_color(Color::Rgb(100, 150, 200), &theme, None),
+            reflection_color(Color::Rgb(100, 150, 200), &theme, None, 0.0),
             Color::Rgb(50, 76, 101)
         );
+        // Deeper rows sink further into the background.
+        let Color::Rgb(faded_red, ..) =
+            reflection_color(Color::Rgb(100, 150, 200), &theme, None, 1.0)
+        else {
+            panic!("faded reflection stays RGB");
+        };
+        assert!(faded_red < 50);
 
         theme.bg = Color::Reset;
         assert_eq!(
-            reflection_color(Color::Rgb(100, 150, 200), &theme, None),
+            reflection_color(Color::Rgb(100, 150, 200), &theme, None, 0.0),
             theme.faint
         );
 
@@ -1537,6 +1542,7 @@ mod tests {
                 Color::Rgb(100, 150, 200),
                 &theme,
                 Some(Color::Rgb(20, 30, 40)),
+                0.0,
             ),
             Color::Rgb(50, 76, 101)
         );
