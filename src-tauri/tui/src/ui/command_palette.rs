@@ -151,9 +151,8 @@ fn draw_commands(
         };
         let marker_width = 2_usize.min(usize::from(area.width));
         let content_width = usize::from(area.width).saturating_sub(marker_width);
-        let alias_width = text::display_width(command.aliases)
-            .min(18)
-            .min(content_width / 2);
+        let alias = i18n::t(command.alias);
+        let alias_width = text::display_width(alias).min(18).min(content_width / 2);
         let usage_width = content_width.saturating_sub(alias_width);
         let marker = if selected { "› " } else { "  " };
         let line = Line::from(vec![
@@ -166,7 +165,7 @@ fn draw_commands(
                 base.fg(if selected { theme.fg } else { theme.dim }),
             ),
             Span::styled(
-                text::pad_display_right(command.aliases, alias_width),
+                text::pad_display_right(alias, alias_width),
                 base.fg(if selected { theme.dim } else { theme.faint }),
             ),
         ]);
@@ -277,7 +276,12 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered.contains("theme <name>"));
-        assert!(compact.contains("主题<名称>"));
+        // The alias column follows the active locale.
+        let alias_compact = i18n::t(Key::CommandTheme)
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(compact.contains(&alias_compact));
         assert!(!rendered.contains("volume <0-100>"));
     }
 
