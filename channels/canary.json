@@ -1,23 +1,23 @@
 {
-  "version": "0.9.0-canary.6",
-  "notes": "YesPlayMusic 0.9.0-canary.6",
-  "pub_date": "2026-08-17T17:42:21Z",
+  "version": "0.9.0-canary.7",
+  "notes": "YesPlayMusic 0.9.0-canary.7",
+  "pub_date": "2026-08-18T00:26:49Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0VxQmZqcmhiaG9tSzZRSUduNzJLUzZNbjAvWWljQ3VPa3F4OUZXYUJ0MnVFSEs3UFFPN3RsL2ZDR2c0MmgveEhFVUV4UEhJc21aaDNLZnlwbjFib0FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTg2OTYwCWZpbGU6WWVzUGxheU11c2ljLmFwcC50YXIuZ3oKbG51cFBYUlpnNUlyaTVJbXZENkRMeVNiODVTTFJ1NUxocE4xRGYyR0w4UVhsaXhpV0ZtcXVYZjRJQUp1OW93MkNiOG56S3Zjb2JTRFFQdUR4TWVxREE9PQo=",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.6/YesPlayMusic.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N1Bnd1l0WXZ2aGZ2OHpzdzhsVDBpdEY2dTFKWXJwd0NiMjZHYURNTVhYNVhvaTh2RVAvNTh0MzRVZXMvaGZ2aHJlZXlmNnFFbEpoL3FmRjFZTVFteFE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MDEyMjY4CWZpbGU6WWVzUGxheU11c2ljLmFwcC50YXIuZ3oKUE5EMnRxcnZaSHBtbTRRbkJyTmRoQzRqOUdsUmE1Ty9YMzFuN0dnbkc4azlUa3FnbzVBOElqQmh5Y2lUc1Q0YlViRW9ubEdIYm1CclFOSktuUFo3REE9PQo=",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.7/YesPlayMusic.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0MvWnZXT0IyckhMSkgwSitZZ215bDZiM2JiaVRIS0xmR045TjdISjQ3UjF3cUVEVWxETmpNYlBQRzE4U2drQ1RuZkdzZTg4YUJmS0E4Sm53TFZ6eGdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTg3NDEzCWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS42X3g2NC1zZXR1cC5leGUKeGxXQmwvZ1VaelV4T21xN3N4VUhjaEhmc2NRamNObTZRenFXOGlCUjdQUDBjeDB1M3QyK0NQQVFZYmpxN1pBa2ZSNmwzUXcweDNWTm1OWFkwVHFKQlE9PQo=",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.6/YesPlayMusic_0.9.0-canary.6_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0ROQjdUY2VjK0hpTGRPYzJSMjcvYjRDaFJxMWNFSlhMTzN4bDhxbTNRNmptYlRsWmlsRWEyZGJjR0t1d1VmWmxjTTI5bXRoT0prckprWXU5Wm13dHc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MDEyNTU0CWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS43X3g2NC1zZXR1cC5leGUKMFlEMWNIV1grRHR1UmxuOGU1SjRLQjdmZlFJUVlkd0llTFE4aG9VbFM5dzBqaE1VUlRDSkVOaHcreU5LV3VxaEplMklLRnpkMmttN1k1dGVZYko2Q3c9PQo=",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.7/YesPlayMusic_0.9.0-canary.7_x64-setup.exe"
     },
     "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0hHNXV2Y2wrYitkVEZ2R2k1QjNOSlFmTyt0THpiWGp5VHRCenNnVkNvKzREMDBKb2lEVCtzUWRjTWZJYzM5TTlNc2ZWZUZLNWlrUjd4RmQydDNRRmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTg2OTE4CWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS42X2FtZDY0LkFwcEltYWdlCmVWNjlYTjJ5MFNYYTFqY3Y3ZVNjUzh5aTM4NHNlVVFoYURRMkkyZUk1MERnaWNPek5WTTNXRFdCdUtJM1ErV1g4VFozU0UrUFcxNVdnK1dMamhuekFRPT0K",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.6/YesPlayMusic_0.9.0-canary.6_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N080N2NPTzI2ekcrSDkza2RhTVlOSmZMWmVFMDRjM0xuNGx6bDdCaXFicEJzRjZqT0h4cVhnWmRrSFNjbTU1dkVjVnZjbHBveCt5Ky9kbm9BRnYxRlF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MDEyNjkzCWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS43X2FtZDY0LkFwcEltYWdlCkM4OGFETDQ1THFvUm5KM2R1aE8rNVFOWjVxUUFJemg2M09VTDdaR2dVaGJLZzJ3T1JjeTdYOGM1eVZyYmgzeGF4RjI5TXBYYm1LbjZ1ODVoallGaEJ3PT0K",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.7/YesPlayMusic_0.9.0-canary.7_amd64.AppImage"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0twaW94bExEeGZaNU5MdU1ycE1IRWZrWVV3bTBScTRNaVRvaU9UNjhreDJYZE13UU9BeHhJWEI4Ym9Za1R0NnJjS3hLc0pKVU4vUnRZVFBJcmxEaUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTg2OTE4CWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS42X2FtZDY0LmRlYgp2ZEdmbFVYLzV6Nk1ES3JEY0ZvcmFHVzB3ckhLY3RXaE80UUdKOXpCUk9oWkxZQkhVbDB3MVZSVW9zZ0cxSFFWZGtrQlZXRFJDMnZxS3JEaXpCRHdEZz09Cg==",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.6/YesPlayMusic_0.9.0-canary.6_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0Jja3JoRGdYdDFVTk81VUJIWXhtaVRUeFdYU3UrV0hzbjBBdVQ2VGRUUmRlNmVUWUxYaWhhN2ZPRlUyTDMxNkhCUC9LQSsrUjE1ZzBJY09CRkJHcEEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MDEyNjkzCWZpbGU6WWVzUGxheU11c2ljXzAuOS4wLWNhbmFyeS43X2FtZDY0LmRlYgo2OU5LZlBLUGJDZFMrS0RvSGxCNjFuemN2a1pZYnJ5T3d5ejdDL3ZxdlF2WjE4cjFoc2M2ZWVhRzQ0KzlUS0FvZGlhZi9wSnMxOHRHUisrYWxPWUFCdz09Cg==",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.0-canary.7/YesPlayMusic_0.9.0-canary.7_amd64.deb"
     }
   }
 }
