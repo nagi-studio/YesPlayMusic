@@ -103,6 +103,8 @@ mod tests {
             album: "Long Season".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         }
     }
 

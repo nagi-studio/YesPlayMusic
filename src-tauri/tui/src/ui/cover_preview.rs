@@ -171,6 +171,8 @@ mod tests {
             album: "Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         }];
         state.selected = 0;
         let theme = state.theme;
@@ -214,6 +216,8 @@ mod tests {
             album: String::new(),
             duration_ms: 0,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         };
         assert!(!metadata_needs_marquee(&exact));
 

@@ -263,6 +263,8 @@ mod tests {
                 album: "Album".into(),
                 duration_ms: 180_000,
                 pic_url: None,
+                artist_id: None,
+                album_id: None,
             });
             if liked {
                 state.liked.insert(1);
@@ -298,6 +300,8 @@ mod tests {
             album: "Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         });
         state.queue_pos = Some(0);
         let mut hits = Hits::default();

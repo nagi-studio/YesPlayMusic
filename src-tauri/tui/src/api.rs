@@ -69,6 +69,12 @@ fn song_row_from_hit(hit: SongItem) -> SongRow {
             .first()
             .map(|artist| artist.name.clone())
             .unwrap_or_else(|| "?".to_owned()),
+        artist_id: hit
+            .artists
+            .first()
+            .map(|artist| artist.id)
+            .filter(|id| *id > 0),
+        album_id: (hit.album.id > 0).then_some(hit.album.id),
         album: hit.album.name,
         duration_ms: hit.duration_ms,
         pic_url: hit.album.pic_url,
@@ -128,6 +134,8 @@ pub struct ResolvedTrack {
     pub expected_md5: Option<[u8; 16]>,
     pub duration_ms: i64,
     pub pic_url: Option<String>,
+    pub artist_id: Option<i64>,
+    pub album_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -588,6 +596,8 @@ impl Ncm {
             expected_md5: None,
             duration_ms: row.duration_ms,
             pic_url: row.pic_url.clone(),
+            artist_id: row.artist_id,
+            album_id: row.album_id,
         })
     }
 
@@ -619,6 +629,8 @@ impl Ncm {
                 album: song["al"]["name"].as_str().unwrap_or("").to_owned(),
                 duration_ms: song["dt"].as_i64().unwrap_or(0),
                 pic_url: song["al"]["picUrl"].as_str().map(str::to_owned),
+                artist_id: song["ar"][0]["id"].as_i64().filter(|id| *id > 0),
+                album_id: song["al"]["id"].as_i64().filter(|id| *id > 0),
             };
             return Ok(self.resolved_track(row, requested_quality, source));
         }
@@ -645,6 +657,8 @@ impl Ncm {
             media: ResolvedMedia::NeteaseUrl(source.url),
             duration_ms: row.duration_ms,
             pic_url: row.pic_url,
+            artist_id: row.artist_id,
+            album_id: row.album_id,
         }
     }
 }
@@ -804,6 +818,8 @@ mod tests {
             album: "Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         }
     }
 
@@ -975,6 +991,8 @@ mod tests {
                 album: "Album".into(),
                 duration_ms: 180_000,
                 pic_url: None,
+                artist_id: None,
+                album_id: None,
             },
             requested_quality,
             PlaybackSource {

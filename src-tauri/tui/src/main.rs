@@ -10,6 +10,7 @@ mod ctl;
 mod event;
 mod i18n;
 mod icons;
+mod logo;
 mod lyrics;
 mod nerd_font;
 pub mod pixel;
@@ -19,6 +20,7 @@ mod remote;
 mod self_update;
 mod spectrum;
 mod store;
+mod term;
 mod terminal_background;
 mod theme;
 mod ui;
@@ -85,6 +87,10 @@ impl From<Ctl> for remote::Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     if let Some(Ctl::Update) = args.command {
+        // The updater prints a whole screen of its own, so it follows the
+        // configured language just like the TUI does.
+        let config = config::Config::load_with_metadata();
+        i18n::init(i18n::Lang::from_config(&config.config.language));
         let runtime = tokio::runtime::Runtime::new()?;
         return runtime.block_on(self_update::run());
     }

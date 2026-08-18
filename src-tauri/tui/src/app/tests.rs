@@ -46,6 +46,8 @@ fn row(id: i64) -> SongRow {
         album: "Album".into(),
         duration_ms: 180_000,
         pic_url: None,
+        artist_id: None,
+        album_id: None,
     }
 }
 
@@ -57,6 +59,8 @@ fn named_row(id: i64, title: &str, artist: &str) -> SongRow {
         album: "Album".into(),
         duration_ms: 180_000,
         pic_url: None,
+        artist_id: None,
+        album_id: None,
     }
 }
 
@@ -107,6 +111,82 @@ async fn paused_ui_ticks_advance_the_marquee_without_consuming_the_gg_prefix() {
 }
 
 #[tokio::test]
+async fn a_clicked_link_opens_its_own_page_even_after_the_track_moved_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.zen = true;
+    // The click was drawn against 周杰伦, but the queue advanced before the
+    // action reduced. The link carries its own target, so the page that
+    // opens is still the one the user pointed at.
+    state.now = Some(NowPlaying {
+        title: "Next".into(),
+        artist: "Someone Else".into(),
+        album: String::new(),
+        artist_id: Some(999),
+        album_id: None,
+    });
+    state.update(
+        Action::OpenPage(crate::ui::Hits::link(
+            crate::api::SearchChannel::Artists,
+            6452,
+            "周杰伦".into(),
+        )),
+        &fx,
+    );
+
+    assert_eq!(state.view, View::Search);
+    // Zen draws the player over every view, so the page would be invisible.
+    assert!(!state.zen);
+    let detail = state.search.detail.as_ref().expect("artist page opened");
+    assert_eq!(detail.id, 6452);
+    assert_eq!(detail.channel, crate::api::SearchChannel::Artists);
+    assert_eq!(detail.title, "周杰伦");
+    // Back resolves its index against the detail's own bucket, so the tab has
+    // to follow the page or an artist index lands in the song list.
+    assert_eq!(state.search.channel, crate::api::SearchChannel::Artists);
+}
+
+#[test]
+fn a_centred_meta_line_puts_its_link_under_the_visible_text() {
+    use crate::ui::now_playing::meta_link_rect;
+    let area = Rect::new(0, 0, 40, 6);
+    let left = meta_link_rect(area, 1, false, 12, 2, 10).expect("left rect");
+    assert_eq!((left.x, left.y, left.width), (2, 1, 10));
+    // Centred: Ratatui offsets by the whole line width, FM badge included.
+    let centred = meta_link_rect(area, 1, true, 20, 0, 10).expect("centred rect");
+    assert_eq!(centred.x, 10);
+    // Off the bottom, or nothing to click, or pushed past the right edge:
+    // none of these may leave a clickable region behind.
+    assert!(meta_link_rect(area, 9, false, 12, 2, 10).is_none());
+    assert!(meta_link_rect(area, 1, false, 2, 2, 0).is_none());
+    assert!(meta_link_rect(Rect::new(0, 0, 3, 6), 1, false, 5, 3, 2).is_none());
+}
+
+#[test]
+fn a_playing_track_keeps_the_ui_tick_armed_on_its_own() {
+    let mut state = AppState::new(&Config::default());
+    // Idle: nothing moves by itself, so the loop is free to sleep.
+    assert!(!state.needs_ui_tick());
+
+    state.now = Some(NowPlaying {
+        title: "Short".into(),
+        artist: "Artist".into(),
+        album: String::new(),
+        artist_id: None,
+        album_id: None,
+    });
+    // A title too short to scroll used to leave the loop with no periodic
+    // wake-up at all: the progress bar and lyrics then only advanced while
+    // unrelated events (mouse motion over the terminal) happened to arrive.
+    assert!(!state.marquee_active());
+    assert!(state.needs_ui_tick());
+
+    state.paused = true;
+    assert!(!state.needs_ui_tick());
+}
+
+#[tokio::test]
 async fn paused_mini_player_ticks_advance_its_title_marquee() {
     let directory = tempfile::tempdir().unwrap();
     let fx = effects(&directory);
@@ -117,6 +197,8 @@ async fn paused_mini_player_ticks_advance_its_title_marquee() {
         title: "A deliberately long title that must scroll in the mini player".into(),
         artist: "Artist".into(),
         album: String::new(),
+        artist_id: None,
+        album_id: None,
     });
 
     apply(&mut state, Action::Resize { cols: 80, rows: 6 }, &fx, &hits);
@@ -1184,6 +1266,8 @@ async fn current_unm_result_uses_the_localised_source_status() {
                 expected_md5: None,
                 duration_ms: 180_000,
                 pic_url: None,
+                artist_id: None,
+                album_id: None,
             },
         },
         &fx,
@@ -1504,6 +1588,8 @@ async fn quality_preview_rejects_a_prefetch_from_the_previous_setting() {
                 expected_md5: None,
                 duration_ms: 180_000,
                 pic_url: None,
+                artist_id: None,
+                album_id: None,
             },
         },
         &fx,

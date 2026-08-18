@@ -71,6 +71,11 @@ pub struct SongRow {
     pub album: String,
     pub duration_ms: i64,
     pub pic_url: Option<String>,
+    /// The first credited artist and the album, kept so a frontend can link
+    /// to their pages. `None` where the payload omitted them — some cloud
+    /// and FM rows carry names without ids.
+    pub artist_id: Option<i64>,
+    pub album_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1366,6 +1371,14 @@ fn song_row_flex(song: &Value) -> SongRow {
         album,
         duration_ms,
         pic_url,
+        artist_id: song["ar"][0]["id"]
+            .as_i64()
+            .or_else(|| song["artists"][0]["id"].as_i64())
+            .filter(|id| *id > 0),
+        album_id: song["al"]["id"]
+            .as_i64()
+            .or_else(|| song["album"]["id"].as_i64())
+            .filter(|id| *id > 0),
     }
 }
 
@@ -1439,6 +1452,12 @@ fn song_row_from_hit(hit: SongItem) -> SongRow {
         album: hit.album.name,
         duration_ms: hit.duration_ms,
         pic_url: hit.album.pic_url,
+        artist_id: hit
+            .artists
+            .first()
+            .map(|artist| artist.id)
+            .filter(|id| *id > 0),
+        album_id: (hit.album.id > 0).then_some(hit.album.id),
     }
 }
 
@@ -2229,6 +2248,8 @@ mod tests {
                 album: "Album".into(),
                 duration_ms: 180_000,
                 pic_url: None,
+                artist_id: None,
+                album_id: None,
             })
             .collect()
     }

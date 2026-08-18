@@ -44,6 +44,8 @@ fn row(id: i64) -> SongRow {
         album: "Album".into(),
         duration_ms: 180_000,
         pic_url: None,
+        artist_id: None,
+        album_id: None,
     }
 }
 

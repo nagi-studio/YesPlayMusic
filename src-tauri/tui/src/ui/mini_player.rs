@@ -202,6 +202,8 @@ mod tests {
             title: "A deliberately long title for the compact player".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         state.duration = Some(Duration::from_secs(245));
         state.position = Duration::from_secs(61);
@@ -244,6 +246,8 @@ mod tests {
             title: "雨爱".into(),
             artist: "杨丞琳".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
 
         assert_eq!(mini_layout(&state, 33, "雨爱 — 杨丞琳").title_width, 13);
@@ -297,6 +301,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
 
         for width in 1..32 {

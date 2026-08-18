@@ -7,6 +7,12 @@ use std::time::Duration;
 use serde::Deserialize;
 
 const RELEASES_URL: &str = "https://api.github.com/repos/nagi-studio/YesPlayMusic/releases";
+/// The tap is bumped by hand after a release, so it lags GitHub by anywhere
+/// from minutes to days. Announcing a tag `brew upgrade` cannot deliver yet
+/// is exactly how gh (cli/cli#6949) and codex (openai/codex#6436) collected
+/// "already installed" bug reports — a keg asks the formula, not the tag.
+const TAP_FORMULA_URL: &str =
+    "https://raw.githubusercontent.com/nagi-studio/homebrew-ypm/HEAD/Formula/ypm.rb";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Deserialize)]
@@ -75,6 +81,12 @@ pub(crate) async fn check(current: &'static str) -> Option<String> {
         .user_agent(concat!("ypm/", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
+    if installed_via_brew() {
+        let formula = fetch(&client, TAP_FORMULA_URL).await?;
+        let published = formula_version(&formula)?;
+        let version = parse_version(&published)?;
+        return (version > current_version).then(|| format!("v{published}"));
+    }
     if current_version.stable {
         let body = fetch(&client, &format!("{RELEASES_URL}/latest")).await?;
         let release: Release = serde_json::from_str(&body).ok()?;
@@ -98,6 +110,18 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Option<String> {
         .text()
         .await
         .ok()
+}
+
+/// Pulls `version "x.y.z"` out of a formula. The template ships an all-zero
+/// placeholder that a real release replaces, and 0.0.0 outranks nothing, so
+/// an unreleased tap simply reports no update.
+fn formula_version(formula: &str) -> Option<String> {
+    formula.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("version ")?;
+        let quoted = rest.trim().strip_prefix('"')?;
+        let (version, _) = quoted.split_once('"')?;
+        Some(version.to_owned())
+    })
 }
 
 /// Homebrew keg installs live under a Cellar path; that decides whether
@@ -129,6 +153,18 @@ mod tests {
             parse_version("0.8.0-canary.3").unwrap() > parse_version("0.8.0-canary.2").unwrap()
         );
         assert_eq!(parse_version("0.8.0-rc.1"), None);
+    }
+
+    #[test]
+    fn the_tap_formula_yields_the_version_brew_would_install() {
+        let formula = "class Ypm < Formula\n  desc \"x\"\n\n  version \"0.9.1\"\n\n  on_macos do\n    url \"https://example/v0.9.1/ypm\"\n  end\nend\n";
+        assert_eq!(formula_version(formula).as_deref(), Some("0.9.1"));
+        // The unreleased template placeholder outranks nothing, so a tap that
+        // has never been bumped simply reports no update.
+        let template = "  version \"0.0.0\"\n";
+        let placeholder = parse_version(&formula_version(template).unwrap()).unwrap();
+        assert!(parse_version("0.8.0").unwrap() > placeholder);
+        assert_eq!(formula_version("class Ypm < Formula\nend"), None);
     }
 
     #[test]

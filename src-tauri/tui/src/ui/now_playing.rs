@@ -10,7 +10,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::action::MenuEntry;
-use crate::app::AppState;
+use crate::api::SearchChannel;
+use crate::app::{AppState, SelfUpdate};
 use crate::i18n::{self, Key};
 use crate::ui::text::display_width;
 use crate::ui::{format_duration, Hits};
@@ -153,7 +154,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
                     Constraint::Length(panel_spectrum),
                 ])
                 .areas(panel);
-                draw_meta(frame, state, text_area, false);
+                draw_meta(frame, state, text_area, false, hits);
                 // Reflect draws its waterline at 2/3 of the area. Extending
                 // the area below the group by half the band puts the line
                 // level with the cover's bottom edge and lets the
@@ -178,7 +179,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
                     &state.theme,
                 );
             } else {
-                draw_meta(frame, state, panel, false);
+                draw_meta(frame, state, panel, false, hits);
             }
         }
         crate::app::PlayLayout::Stacked => {
@@ -194,7 +195,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
             .areas(main);
             let cover_area = centered(cover_row, cover_w, art_height);
             draw_cover(frame, state, cover_area);
-            draw_meta(frame, state, meta_area, true);
+            draw_meta(frame, state, meta_area, true, hits);
         }
     }
     if spectrum_height > 0 {
@@ -243,9 +244,11 @@ fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hi
 
     // The reserved hint row carries the build's own version until an
     // update exists, which is the more useful thing to show there.
-    let hint = match &state.update_available {
-        Some(version) => i18n::t_update_available(version, state.brew_install),
-        None => format!("ypm v{}", env!("CARGO_PKG_VERSION")),
+    let hint = match (&state.self_update, &state.update_available) {
+        (SelfUpdate::Running(line), _) => line.clone(),
+        (SelfUpdate::Installed, _) => i18n::t_update_restart_now().to_owned(),
+        (_, Some(version)) => i18n::t_update_available(version),
+        _ => format!("ypm v{}", env!("CARGO_PKG_VERSION")),
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(hint, Style::new().fg(theme.dim)))).centered(),
@@ -319,7 +322,49 @@ fn draw_cover(frame: &mut Frame, state: &mut AppState, area: Rect) {
     }
 }
 
-fn draw_meta(frame: &mut Frame, state: &mut AppState, area: Rect, centered_text: bool) {
+/// Screen rect of a clickable run inside one meta line. `line_width` is the
+/// whole line, because a centred Paragraph offsets by it; `prefix_width` is
+/// what sits left of the run. Returns `None` when the run is off the bottom
+/// of the area or has no visible columns left — either way there is nothing
+/// on screen to click.
+pub(crate) fn meta_link_rect(
+    area: Rect,
+    index: usize,
+    centered: bool,
+    line_width: usize,
+    prefix_width: usize,
+    run_width: usize,
+) -> Option<Rect> {
+    let row = u16::try_from(index).ok()?;
+    if row >= area.height || run_width == 0 {
+        return None;
+    }
+    // Ratatui centres by the rendered line width, and does not centre a line
+    // that already overflows the area.
+    let offset = if centered {
+        usize::from(area.width).saturating_sub(line_width) / 2
+    } else {
+        0
+    };
+    let start = u16::try_from(offset + prefix_width).ok()?;
+    let width = u16::try_from(run_width)
+        .ok()?
+        .min(area.width.saturating_sub(start));
+    (width > 0).then_some(Rect {
+        x: area.x + start,
+        y: area.y + row,
+        width,
+        height: 1,
+    })
+}
+
+fn draw_meta(
+    frame: &mut Frame,
+    state: &mut AppState,
+    area: Rect,
+    centered_text: bool,
+    hits: &mut Hits,
+) {
     let theme = state.theme;
     let indent = if centered_text { "" } else { "  " };
     let mut lines = Vec::new();
@@ -348,8 +393,42 @@ fn draw_meta(frame: &mut Frame, state: &mut AppState, area: Rect, centered_text:
                 Style::new().fg(theme.accent),
             ));
         }
+        // Registered before the push, so the index is the row this line lands
+        // on: a Paragraph renders line N at area.y + N.
+        if let Some(id) = now.artist_id.filter(|_| !now.artist.is_empty()) {
+            let line_width: usize = artist.iter().map(|span| display_width(&span.content)).sum();
+            if let Some(rect) = meta_link_rect(
+                area,
+                lines.len(),
+                centered_text,
+                line_width,
+                display_width(indent),
+                display_width(&now.artist),
+            ) {
+                hits.links.push((
+                    rect,
+                    Hits::link(SearchChannel::Artists, id, now.artist.clone()),
+                ));
+            }
+        }
         lines.push(Line::from(artist));
         if !now.album.is_empty() {
+            if let Some(id) = now.album_id {
+                let album_width = display_width(&now.album);
+                if let Some(rect) = meta_link_rect(
+                    area,
+                    lines.len(),
+                    centered_text,
+                    display_width(indent) + album_width,
+                    display_width(indent),
+                    album_width,
+                ) {
+                    hits.links.push((
+                        rect,
+                        Hits::link(SearchChannel::Albums, id, now.album.clone()),
+                    ));
+                }
+            }
             lines.push(Line::from(Span::styled(
                 format!("{indent}{}", now.album),
                 Style::new().fg(theme.dim),
@@ -1149,6 +1228,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         state
             .spectrum
@@ -1182,6 +1263,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         state
             .spectrum
@@ -1222,6 +1305,8 @@ mod tests {
                 title: "Title".into(),
                 artist: "Artist".into(),
                 album: String::new(),
+                artist_id: None,
+                album_id: None,
             });
             state
                 .spectrum
@@ -1257,6 +1342,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         state.lyrics = vec![LyricLine {
             time: Duration::ZERO,
@@ -1399,6 +1486,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         state.position = Duration::from_millis(1_250);
         state.lyrics = vec![word_synced_line()];
@@ -1444,6 +1533,8 @@ mod tests {
             title: "Title".into(),
             artist: "Artist".into(),
             album: "Album".into(),
+            artist_id: None,
+            album_id: None,
         });
         state.current_track_id = Some(42);
         state.liked.insert(42);
@@ -1456,7 +1547,13 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                draw_meta(frame, &mut state, Rect::new(0, 0, 80, 5), false);
+                draw_meta(
+                    frame,
+                    &mut state,
+                    Rect::new(0, 0, 80, 5),
+                    false,
+                    &mut Hits::default(),
+                );
                 draw_progress(frame, &state, Rect::new(0, 6, 80, 1), &mut hits);
             })
             .unwrap();
@@ -1492,6 +1589,8 @@ mod tests {
                 title: "Title".into(),
                 artist: "Artist".into(),
                 album: "Album".into(),
+                artist_id: None,
+                album_id: None,
             });
             state.queue_source = source;
             state
@@ -1500,7 +1599,15 @@ mod tests {
         let render = |state: &mut AppState| {
             let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
             terminal
-                .draw(|frame| draw_meta(frame, state, Rect::new(0, 0, 80, 5), false))
+                .draw(|frame| {
+                    draw_meta(
+                        frame,
+                        state,
+                        Rect::new(0, 0, 80, 5),
+                        false,
+                        &mut Hits::default(),
+                    )
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let artist_line = (0..80).map(|x| buffer[(x, 1)].symbol()).collect::<String>();

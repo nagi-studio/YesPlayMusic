@@ -56,6 +56,18 @@ pub struct Effects {
     pub config_path: std::path::PathBuf,
 }
 
+/// The in-app updater's lifecycle. A failure returns to `Idle` and reports
+/// itself as a status toast, so the hint goes back to offering `U`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SelfUpdate {
+    #[default]
+    Idle,
+    /// Carries the line to show: phase label plus percentage when known.
+    Running(String),
+    /// Swapped in on disk; only a restart can pick it up.
+    Installed,
+}
+
 // Terminal graphics never upscale (Resize::Fit): the source must out-resolve
 // the cover area or a fullscreen retina window shows a half-sized cover.
 // 1024px covers a ~32-row cover column at typical retina cell sizes.
@@ -373,6 +385,10 @@ pub struct NowPlaying {
     pub title: String,
     pub artist: String,
     pub album: String,
+    /// Ids for the artist and album pages this track links to. `None` when
+    /// the payload never carried them, which is what hides the link.
+    pub artist_id: Option<i64>,
+    pub album_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,6 +456,8 @@ pub struct AppState {
     pub(crate) mouse_captured: bool,
     /// Newer release tag found by the startup check, if any.
     pub update_available: Option<String>,
+    /// Progress of the in-app updater the `U` key starts.
+    pub self_update: SelfUpdate,
     /// Whether this binary lives in a Homebrew Cellar (decides the hint).
     pub brew_install: bool,
     pub theme: Theme,
@@ -549,6 +567,8 @@ impl AppState {
                     album: String::new(),
                     duration_ms: 0,
                     pic_url: None,
+                    artist_id: None,
+                    album_id: None,
                 },
                 SongRow {
                     id: 0,
@@ -557,6 +577,8 @@ impl AppState {
                     album: String::new(),
                     duration_ms: 0,
                     pic_url: None,
+                    artist_id: None,
+                    album_id: None,
                 },
             ],
             selected: 0,
@@ -632,6 +654,7 @@ impl AppState {
             dashboard_hold: false,
             mouse_captured: true,
             update_available: None,
+            self_update: SelfUpdate::Idle,
             brew_install: crate::update::installed_via_brew(),
             seek_after_start: None,
             status: None,
@@ -847,6 +870,17 @@ impl AppState {
         self.active_marquee_target().is_some()
     }
 
+    /// The event loop only wakes on events, and the progress bar and lyrics
+    /// are read from the player at draw time rather than pushed as events —
+    /// so a playing track has to keep the tick armed itself. Without this the
+    /// whole UI freezes until something unrelated arrives, which in practice
+    /// means it only moves while the mouse hovers the terminal.
+    pub(crate) fn needs_ui_tick(&self) -> bool {
+        self.marquee_active()
+            || self.command_feedback.is_some()
+            || (self.now.is_some() && !self.paused)
+    }
+
     fn visible_rows_owned(&self) -> Vec<SongRow> {
         let rows = match self.view {
             View::Library => self.library.as_slice(),
@@ -975,6 +1009,8 @@ impl AppState {
                 title: row.title.clone(),
                 artist: row.artist.clone(),
                 album: row.album.clone(),
+                artist_id: row.artist_id,
+                album_id: row.album_id,
             });
             self.resume_on_play = Some(self.position);
             // Land on the dashboard; 1/Space/next reveal the player.
@@ -1406,6 +1442,8 @@ impl AppState {
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
+            artist_id: track.artist_id,
+            album_id: track.album_id,
         });
         self.duration =
             (track.duration_ms > 0).then(|| Duration::from_millis(track.duration_ms as u64));
@@ -1453,6 +1491,8 @@ impl AppState {
             title: row.title.clone(),
             artist: row.artist.clone(),
             album: row.album.clone(),
+            artist_id: row.artist_id,
+            album_id: row.album_id,
         });
         self.duration =
             (row.duration_ms > 0).then(|| Duration::from_millis(row.duration_ms as u64));
@@ -1535,6 +1575,8 @@ impl AppState {
             title: row.title.clone(),
             artist: row.artist.clone(),
             album: row.album.clone(),
+            artist_id: row.artist_id,
+            album_id: row.album_id,
         });
         self.lyrics.clear();
         self.position = Duration::ZERO;
@@ -1708,6 +1750,8 @@ fn song_row_from_resolved(track: &api::ResolvedTrack) -> SongRow {
         album: track.album.clone(),
         duration_ms: track.duration_ms,
         pic_url: track.pic_url.clone(),
+        artist_id: track.artist_id,
+        album_id: track.album_id,
     }
 }
 
@@ -2582,7 +2626,7 @@ async fn event_loop(
                 };
                 state.apply_bar_original_resize(response);
             }
-            _ = ui_tick.tick(), if state.marquee_active() || state.command_feedback.is_some() => {
+            _ = ui_tick.tick(), if state.needs_ui_tick() => {
                 state.update(Action::UiTick, &fx);
             }
             _ = spectrum_ticks.tick(), if state.config.spectrum_enabled || state.view == View::Settings => {
@@ -2619,7 +2663,16 @@ async fn event_loop(
         }
         if state.force_redraw {
             state.force_redraw = false;
-            terminal.clear()?;
+            // Not Terminal::clear: it snapshots the cursor first, and that
+            // ESC[6n round-trip has to take crossterm's reader mutex, which
+            // the EventStream worker is already holding inside its own poll.
+            // The worker only lets go once an event the EventFilter accepts
+            // arrives, and a CPR reply is not one — so with the pointer
+            // outside the window (no mouse events) the query times out after
+            // two seconds and kills the app. resize() reaches the same
+            // clear_viewport() without ever asking the terminal a question.
+            let area = terminal.size()?;
+            terminal.resize(Rect::new(0, 0, area.width, area.height))?;
         }
         terminal.draw(|frame| ui::draw(frame, &mut state, &mut hits))?;
     }

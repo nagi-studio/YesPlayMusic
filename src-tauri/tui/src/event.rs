@@ -111,6 +111,11 @@ pub fn mouse_action(mouse: MouseEvent, hits: &Hits, selected: usize) -> Option<A
                     return Some(Action::SelectSearchChannel(*channel));
                 }
             }
+            for (rect, link) in &hits.links {
+                if rect.contains(position) {
+                    return Some(Action::OpenPage(link.clone()));
+                }
+            }
             for (rect, _) in &hits.heart {
                 if rect.contains(position) {
                     return Some(Action::ToggleLike);
@@ -200,6 +205,7 @@ pub fn key_action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('f') => Some(Action::StartPersonalFm),
         KeyCode::Char('x') => Some(Action::TrashFmTrack),
         KeyCode::Char('m') => Some(Action::ToggleMute),
+        KeyCode::Char('U') => Some(Action::StartSelfUpdate),
         KeyCode::Char('a') => Some(Action::AddSelectedToQueue),
         KeyCode::Char('/') => Some(Action::StartFilter),
         KeyCode::Tab => Some(Action::ToggleLibraryFocus),

@@ -124,6 +124,7 @@ pub enum Key {
     HelpTitle,
     HelpAnyKey,
     Redraw,
+    SelfUpdate,
     CommandPalette,
     CommandPaletteHint,
     CommandNoMatches,
@@ -386,14 +387,165 @@ pub fn t_candidates_unavailable(keywords: &str) -> String {
     }
 }
 
-pub fn t_update_available(version: &str, brew: bool) -> String {
-    match (language(), brew) {
-        (Lang::Zh, true) => format!("新版本 {version} 可用 · brew upgrade ypm"),
-        (Lang::Zh, false) => format!("新版本 {version} 可用 · 运行 ypm update 升级"),
-        (Lang::En, true) => format!("Update {version} available · brew upgrade ypm"),
-        (Lang::En, false) => format!("Update {version} available · run ypm update"),
-        (Lang::Ja, true) => format!("新バージョン {version} · brew upgrade ypm"),
-        (Lang::Ja, false) => format!("新バージョン {version} · ypm update で更新"),
+/// The dashboard hint. It names the key rather than a command because `U`
+/// now covers both installs — a keg included, where it drives brew.
+pub fn t_update_available(version: &str) -> String {
+    match language() {
+        Lang::Zh => format!("新版本 {version} 可用 · 按 U 升级"),
+        Lang::En => format!("Update {version} available · press U to install"),
+        Lang::Ja => format!("新バージョン {version} · U キーで更新"),
+    }
+}
+
+pub fn t_update_checking() -> &'static str {
+    match language() {
+        Lang::Zh => "检查更新",
+        Lang::En => "Checking for updates",
+        Lang::Ja => "更新を確認",
+    }
+}
+
+pub fn t_update_up_to_date() -> &'static str {
+    match language() {
+        Lang::Zh => "已是最新版本",
+        Lang::En => "Already up to date",
+        Lang::Ja => "最新バージョンです",
+    }
+}
+
+pub fn t_update_downloading(asset: &str) -> String {
+    match language() {
+        Lang::Zh => format!("下载 {asset}"),
+        Lang::En => format!("Downloading {asset}"),
+        Lang::Ja => format!("{asset} をダウンロード"),
+    }
+}
+
+pub fn t_update_verifying() -> &'static str {
+    match language() {
+        Lang::Zh => "校验签名",
+        Lang::En => "Verifying signature",
+        Lang::Ja => "署名を検証",
+    }
+}
+
+pub fn t_update_installing() -> &'static str {
+    match language() {
+        Lang::Zh => "安装",
+        Lang::En => "Installing",
+        Lang::Ja => "インストール",
+    }
+}
+
+pub fn t_update_installed() -> &'static str {
+    match language() {
+        Lang::Zh => "已安装",
+        Lang::En => "Installed",
+        Lang::Ja => "インストール済み",
+    }
+}
+
+pub fn t_update_restart(version: &str) -> String {
+    match language() {
+        Lang::Zh => format!("重新运行 ypm 即可使用 {version}"),
+        Lang::En => format!("Restart ypm to run {version}"),
+        Lang::Ja => format!("ypm を再起動すると {version} になります"),
+    }
+}
+
+pub fn t_update_brew_refreshing() -> &'static str {
+    match language() {
+        Lang::Zh => "刷新 Homebrew",
+        Lang::En => "Refreshing Homebrew",
+        Lang::Ja => "Homebrew を更新",
+    }
+}
+
+/// Literally the command being run, so the user can repeat it by hand.
+pub fn t_update_brew_upgrading() -> &'static str {
+    "brew upgrade ypm"
+}
+
+pub fn t_update_brew_installed() -> &'static str {
+    match language() {
+        Lang::Zh => "已通过 Homebrew 升级",
+        Lang::En => "Upgraded through Homebrew",
+        Lang::Ja => "Homebrew で更新しました",
+    }
+}
+
+pub fn t_update_brew_missing() -> &'static str {
+    match language() {
+        Lang::Zh => "找不到 brew 命令",
+        Lang::En => "brew command not found",
+        Lang::Ja => "brew コマンドが見つかりません",
+    }
+}
+
+/// The TUI's status line has no room for the asset filename.
+pub fn t_update_download_label() -> &'static str {
+    match language() {
+        Lang::Zh => "下载更新",
+        Lang::En => "Downloading update",
+        Lang::Ja => "更新をダウンロード",
+    }
+}
+
+/// Shown in the TUI while the in-app update runs.
+pub fn t_update_in_progress(label: &str, percent: Option<u64>) -> String {
+    match percent {
+        Some(percent) => format!("{label} {percent}%"),
+        None => label.to_owned(),
+    }
+}
+
+pub fn t_update_restart_now() -> &'static str {
+    match language() {
+        Lang::Zh => "更新完成 · 重启 ypm 生效",
+        Lang::En => "Update installed · restart ypm to apply",
+        Lang::Ja => "更新完了 · ypm を再起動してください",
+    }
+}
+
+pub fn t_update_failed(reason: &str) -> String {
+    match language() {
+        Lang::Zh => format!("更新失败：{reason}"),
+        Lang::En => format!("Update failed: {reason}"),
+        Lang::Ja => format!("更新に失敗：{reason}"),
+    }
+}
+
+pub fn t_update_download_failed(url: &str) -> String {
+    match language() {
+        Lang::Zh => format!("下载失败：{url}"),
+        Lang::En => format!("Download failed: {url}"),
+        Lang::Ja => format!("ダウンロード失敗：{url}"),
+    }
+}
+
+pub fn t_update_no_prebuilt() -> &'static str {
+    match language() {
+        Lang::Zh => "此平台没有预构建的 ypm，可从源码 cargo build",
+        Lang::En => "No prebuilt ypm for this platform; build it with cargo",
+        Lang::Ja => "このプラットフォーム向けのビルドはありません（cargo build）",
+    }
+}
+
+pub fn t_update_use_brew() -> &'static str {
+    match language() {
+        Lang::Zh => "这个 ypm 由 Homebrew 管理，请运行：brew upgrade ypm",
+        Lang::En => "This ypm is managed by Homebrew; run: brew upgrade ypm",
+        Lang::Ja => "この ypm は Homebrew 管理です：brew upgrade ypm",
+    }
+}
+
+pub fn t_update_no_pubkey() -> &'static str {
+    match language() {
+        Lang::Zh => "此构建未内嵌更新公钥（本地开发版），请重新构建或从 Releases 下载",
+        Lang::En => {
+            "This build embeds no updater key (local dev build); rebuild or download a release"
+        }
+        Lang::Ja => "このビルドには更新公開鍵がありません（開発ビルド）",
     }
 }
 
@@ -553,6 +705,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::HelpTitle => "快捷键",
             Key::HelpAnyKey => "按任意键关闭",
             Key::Redraw => "重画屏幕",
+            Key::SelfUpdate => "下载并安装新版本",
             Key::CommandPalette => "命令面板",
             Key::CommandPaletteHint => "↑/↓ 选择 · Enter 执行 · Esc 关闭",
             Key::CommandNoMatches => "没有匹配的命令",
@@ -730,6 +883,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::HelpTitle => "Keyboard",
             Key::HelpAnyKey => "Press any key to close",
             Key::Redraw => "Redraw the screen",
+            Key::SelfUpdate => "Download and install the update",
             Key::CommandPalette => "Command Palette",
             Key::CommandPaletteHint => "↑/↓ select · Enter run · Esc close",
             Key::CommandNoMatches => "No matching commands",
@@ -907,6 +1061,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::HelpTitle => "キー操作",
             Key::HelpAnyKey => "任意のキーで閉じる",
             Key::Redraw => "画面を再描画",
+            Key::SelfUpdate => "更新をダウンロードして適用",
             Key::CommandPalette => "コマンドパレット",
             Key::CommandPaletteHint => "↑/↓ 選択 · Enter 実行 · Esc 閉じる",
             Key::CommandNoMatches => "一致するコマンドがありません",

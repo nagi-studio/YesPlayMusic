@@ -137,6 +137,14 @@ pub(crate) const fn centered_content(area: Rect) -> Rect {
     }
 }
 
+/// A page the playing view links to, captured while drawing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageLink {
+    pub channel: crate::api::SearchChannel,
+    pub id: i64,
+    pub title: String,
+}
+
 /// Geometry recorded at draw time so mouse events can be resolved
 /// against what is actually on screen.
 #[derive(Default)]
@@ -151,12 +159,22 @@ pub struct Hits {
     pub playback_mode: Vec<(Rect, ())>,
     pub volume: Vec<(Rect, ())>,
     pub progress: Vec<(Rect, ())>,
+    /// Artist and album names on the playing view. The link is resolved at
+    /// draw time and travels with the click, so a track change queued ahead
+    /// of the click cannot redirect it to a different song's artist.
+    pub links: Vec<(Rect, PageLink)>,
     /// Quit-confirm buttons: true = 确定退出, false = 点错了.
     pub confirm: Vec<(Rect, bool)>,
     pub settings_rows: Vec<(Rect, usize)>,
     pub settings_adjust: Vec<(Rect, i32)>,
     pub settings_save: Vec<Rect>,
     pub settings_cancel: Vec<Rect>,
+}
+
+impl Hits {
+    pub(crate) fn link(channel: crate::api::SearchChannel, id: i64, title: String) -> PageLink {
+        PageLink { channel, id, title }
+    }
 }
 
 pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
@@ -170,6 +188,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     hits.playback_mode.clear();
     hits.volume.clear();
     hits.progress.clear();
+    hits.links.clear();
     hits.confirm.clear();
     hits.settings_rows.clear();
     hits.settings_adjust.clear();
@@ -291,6 +310,7 @@ fn draw_help(frame: &mut Frame, state: &AppState, area: Rect) {
         ("v", Key::Spectrum),
         ("?", Key::LabelHelp),
         ("Ctrl+L", Key::Redraw),
+        ("U", Key::SelfUpdate),
         (",", Key::Settings),
         ("q", Key::Quit),
     ];
@@ -681,6 +701,8 @@ mod tests {
             title: "夜に駆ける".into(),
             artist: "YOASOBI".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         let backend = TestBackend::new(90, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -744,6 +766,8 @@ mod tests {
             album: "Matrix Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         };
         state.view = view;
         state.session.nickname = Some("Matrix User".into());
@@ -762,6 +786,8 @@ mod tests {
             title: "Matrix Track".into(),
             artist: "Matrix Artist".into(),
             album: "Matrix Album".into(),
+            artist_id: None,
+            album_id: None,
         });
         state.duration = Some(std::time::Duration::from_secs(180));
         state.position = std::time::Duration::from_secs(42);
@@ -1387,6 +1413,8 @@ mod tests {
             title: "Mini title".into(),
             artist: "Mini artist".into(),
             album: String::new(),
+            artist_id: None,
+            album_id: None,
         });
         let backend = TestBackend::new(80, 6);
         let mut terminal = Terminal::new(backend).unwrap();

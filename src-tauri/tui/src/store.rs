@@ -19,6 +19,12 @@ pub struct StoredSong {
     pub album: String,
     pub duration_ms: i64,
     pub pic_url: Option<String>,
+    /// Defaulted so a library written before artist/album links existed
+    /// still loads; those rows simply cannot link until they are refetched.
+    #[serde(default)]
+    pub artist_id: Option<i64>,
+    #[serde(default)]
+    pub album_id: Option<i64>,
 }
 
 impl From<&SongRow> for StoredSong {
@@ -30,6 +36,8 @@ impl From<&SongRow> for StoredSong {
             album: row.album.clone(),
             duration_ms: row.duration_ms,
             pic_url: row.pic_url.clone(),
+            artist_id: row.artist_id,
+            album_id: row.album_id,
         }
     }
 }
@@ -43,6 +51,8 @@ impl StoredSong {
             album: self.album,
             duration_ms: self.duration_ms,
             pic_url: self.pic_url,
+            artist_id: self.artist_id,
+            album_id: self.album_id,
         }
     }
 }
@@ -259,6 +269,8 @@ mod tests {
             album: "夜色".into(),
             duration_ms: 218_000,
             pic_url: Some("https://example.test/cover.jpg".into()),
+            artist_id: None,
+            album_id: None,
         };
         let stored = StoredSong::from(&source);
 
@@ -463,6 +475,8 @@ mod tests {
             album: "Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         }
     }
 }

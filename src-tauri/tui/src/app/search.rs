@@ -594,6 +594,42 @@ impl SearchState {
         accepted
     }
 
+    /// Opens a page for an id the caller already has — the playing track's
+    /// artist or album — rather than one indexed out of the current results.
+    /// It moves `channel` to match: `close_detail` resolves the return index
+    /// against the detail's own bucket, so leaving the tab on Songs would
+    /// apply an album index to the song list. `parent_selected` parks at 0
+    /// because there is no parent row to come back to.
+    pub(crate) fn open_detail_for(
+        &mut self,
+        channel: SearchChannel,
+        id: i64,
+        title: String,
+    ) -> DetailRequest {
+        self.cancel_detail_task();
+        self.channel = channel;
+        self.seq = self.seq.wrapping_add(1);
+        let request = DetailRequest {
+            seq: self.seq,
+            channel,
+            id,
+        };
+        self.detail = Some(SearchDetail {
+            channel,
+            id,
+            title,
+            rows: Vec::new(),
+            error: None,
+            searching: true,
+            cover_url: None,
+            seq: request.seq,
+            parent_selected: 0,
+            selected: 0,
+        });
+        self.input = false;
+        request
+    }
+
     pub(crate) fn open_detail(&mut self, selected: usize) -> Option<DetailRequest> {
         let (id, title, cover_url) = match self.channel {
             SearchChannel::Artists => self
@@ -832,6 +868,8 @@ mod tests {
             album: "Album".into(),
             duration_ms: 180_000,
             pic_url: None,
+            artist_id: None,
+            album_id: None,
         }
     }
 

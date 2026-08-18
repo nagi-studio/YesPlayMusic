@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 
-use crate::action::{Action, CoverSurface, View};
+use crate::action::{Action, CoverSurface, SelfUpdateOutcome, View};
 use crate::api::Source;
 use crate::event;
 use crate::i18n::Key;
@@ -13,7 +13,7 @@ use super::{
     apply_pixel_cover,
     command_palette::{CommandError, CommandInvocation},
     song_row_from_resolved, spawn_cover_prefetch, spawn_render_idle, spawn_resolve, AppState,
-    CoverLoad, CoverStyle, Effects, PlaybackModeSlot, PREVIEW_CELLS,
+    CoverLoad, CoverStyle, Effects, PlaybackModeSlot, SelfUpdate, PREVIEW_CELLS,
 };
 
 impl AppState {
@@ -434,9 +434,30 @@ impl AppState {
             Action::UpdateAvailable(tag) => {
                 // Also surface as a status toast: a late-arriving result
                 // must stay visible after the dashboard has been left.
-                self.status = Some(crate::i18n::t_update_available(&tag, self.brew_install));
+                self.status = Some(crate::i18n::t_update_available(&tag));
                 self.update_available = Some(tag);
             }
+            Action::OpenPage(link) => self.open_page(fx, link),
+            Action::StartSelfUpdate => self.start_self_update(fx),
+            Action::SelfUpdateProgress(line) => {
+                self.status = Some(line.clone());
+                self.self_update = SelfUpdate::Running(line);
+            }
+            Action::SelfUpdateFinished(outcome) => match outcome {
+                SelfUpdateOutcome::Installed => {
+                    self.self_update = SelfUpdate::Installed;
+                    self.status = Some(crate::i18n::t_update_restart_now().into());
+                }
+                SelfUpdateOutcome::UpToDate => {
+                    self.self_update = SelfUpdate::Idle;
+                    self.update_available = None;
+                    self.status = Some(crate::i18n::t_update_up_to_date().into());
+                }
+                SelfUpdateOutcome::Failed(reason) => {
+                    self.self_update = SelfUpdate::Idle;
+                    self.status = Some(crate::i18n::t_update_failed(&reason));
+                }
+            },
             Action::LikedIds { session, ids } => self.apply_liked_ids(session, ids),
             Action::FmMore { session, rows } => self.apply_fm_more(fx, session, rows),
             Action::FmLoadFailed { session, message } => {
@@ -804,6 +825,106 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Opens the artist or album page a click landed on. The link travels
+    /// from the frame that was clicked, so it stays correct even if the track
+    /// changed between the click and this reduction.
+    fn open_page(&mut self, fx: &Effects, link: crate::ui::PageLink) {
+        self.clear_filter();
+        // Zen hides every view but the player, so a page opened underneath it
+        // would be invisible; leaving zen is the only way the click can mean
+        // anything.
+        self.zen = false;
+        let request = self
+            .search
+            .open_detail_for(link.channel, link.id, link.title);
+        let seq = request.seq;
+        let task = spawn_search_detail(fx, request);
+        self.search.attach_detail_task(seq, task);
+        self.view = View::Search;
+    }
+
+    /// Runs the pipeline behind `ypm update` without leaving the app. The
+    /// release check repeats here so `U` also works before the startup check
+    /// has landed — and so a stale tag can never be installed twice.
+    fn start_self_update(&mut self, fx: &Effects) {
+        if self.self_update != SelfUpdate::Idle {
+            return;
+        }
+        let brew = self.brew_install;
+        if !brew {
+            if let Err(error) = crate::self_update::preflight() {
+                self.status = Some(crate::i18n::t_update_failed(&error.to_string()));
+                return;
+            }
+        }
+        let known = self.update_available.clone();
+        let checking = crate::i18n::t_update_checking();
+        self.self_update = SelfUpdate::Running(checking.into());
+        self.status = Some(checking.into());
+
+        let progress = fx.actions.clone();
+        let finished = fx.actions.clone();
+        tokio::spawn(async move {
+            let tag = match known {
+                Some(tag) => Some(tag),
+                None => crate::update::check(env!("CARGO_PKG_VERSION")).await,
+            };
+            let Some(tag) = tag else {
+                let _ = finished.send(Action::SelfUpdateFinished(SelfUpdateOutcome::UpToDate));
+                return;
+            };
+            if brew {
+                let _ = progress.send(Action::SelfUpdateProgress(
+                    crate::i18n::t_update_brew_refreshing().into(),
+                ));
+                let result = async {
+                    crate::self_update::brew_refresh().await?;
+                    let _ = progress.send(Action::SelfUpdateProgress(
+                        crate::i18n::t_update_brew_upgrading().into(),
+                    ));
+                    crate::self_update::brew_upgrade().await
+                }
+                .await;
+                let _ = finished.send(Action::SelfUpdateFinished(match result {
+                    Ok(()) => SelfUpdateOutcome::Installed,
+                    Err(error) => SelfUpdateOutcome::Failed(error.to_string()),
+                }));
+                return;
+            }
+            // One redraw per distinct line: a redraw per chunk would repaint
+            // the whole TUI thousands of times over a single download.
+            let label = crate::i18n::t_update_download_label();
+            let mut last: Option<String> = None;
+            let result = crate::self_update::install(&tag, &mut |stage| {
+                let line = match stage {
+                    crate::self_update::Stage::Downloading { done, total } => {
+                        let percent = total
+                            .filter(|total| *total > 0)
+                            .map(|total| done * 100 / total);
+                        crate::i18n::t_update_in_progress(label, percent)
+                    }
+                    crate::self_update::Stage::Verifying => {
+                        crate::i18n::t_update_verifying().to_owned()
+                    }
+                    crate::self_update::Stage::Installing => {
+                        crate::i18n::t_update_installing().to_owned()
+                    }
+                };
+                if last.as_deref() == Some(line.as_str()) {
+                    return;
+                }
+                last = Some(line.clone());
+                let _ = progress.send(Action::SelfUpdateProgress(line));
+            })
+            .await;
+            let outcome = match result {
+                Ok(_) => SelfUpdateOutcome::Installed,
+                Err(error) => SelfUpdateOutcome::Failed(error.to_string()),
+            };
+            let _ = finished.send(Action::SelfUpdateFinished(outcome));
+        });
     }
 
     pub(super) fn navigate_back(&mut self, fx: &Effects) {

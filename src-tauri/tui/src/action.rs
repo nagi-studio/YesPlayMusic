@@ -25,6 +25,15 @@ pub struct CoverRenderRequest {
     pub source_key: String,
 }
 
+/// How the in-app updater ended. "Up to date" is not a failure, so it stays
+/// distinct from the error arm.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SelfUpdateOutcome {
+    Installed,
+    UpToDate,
+    Failed(String),
+}
+
 /// Idle-dashboard menu entries; resolved to Actions at the input layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuEntry {
@@ -109,7 +118,14 @@ pub enum Action {
     SaveSettings,
     CancelSettings,
     NerdFontProbeFinished(crate::nerd_font::Status),
+    /// Open the artist or album page a click landed on. The target is the
+    /// one that was on screen, not whatever is playing when this is reduced.
+    OpenPage(crate::ui::PageLink),
     UpdateAvailable(String),
+    /// Download, verify and swap in the newest release from inside the app.
+    StartSelfUpdate,
+    SelfUpdateProgress(String),
+    SelfUpdateFinished(SelfUpdateOutcome),
     JumpTop,
     JumpBottom,
     ConfirmYes,
