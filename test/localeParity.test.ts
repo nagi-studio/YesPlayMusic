@@ -709,12 +709,14 @@ describe('locale 目录', () => {
   test('语言选择器由 catalog 驱动，没有第二份硬编码清单', () => {
     const settingsView = readFileSync('src/views/settings.vue', 'utf8');
     const picker = settingsView.match(
-      /<select v-model="lang">[\s\S]*?<\/select>/
+      /<Select\s+v-model="lang"[^>]*:options="langOptions"[^>]*>/
     )?.[0];
     expect(picker).toBeString();
-    expect(picker).toContain('option in localeOptions');
+    // langOptions 由 localeOptions computed 生成，后者来自 catalog
+    expect(settingsView).toContain('langOptions()');
+    expect(settingsView).toContain('localeOptions.map');
     // A literal <option value="xx"> inside this picker is a second source of truth.
-    const hardcoded = [...(picker ?? '').matchAll(/<option\s+value="/g)].length;
+    const hardcoded = [...(settingsView.matchAll(/<option\s+value="/g))].length;
     expect({ picker: 'lang', hardcodedOptions: hardcoded }).toEqual({
       picker: 'lang',
       hardcodedOptions: 0,

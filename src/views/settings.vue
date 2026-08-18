@@ -32,15 +32,7 @@
           <div class="title"> {{ $t('settings.language') }} </div>
         </div>
         <div class="right">
-          <select v-model="lang">
-            <option
-              v-for="option in localeOptions"
-              :key="option.code"
-              :value="option.code"
-            >
-              {{ option.label }}
-            </option>
-          </select>
+          <Select v-model="lang" :options="langOptions" />
         </div>
       </div>
       <div class="item">
@@ -48,15 +40,7 @@
           <div class="title"> {{ $t('settings.appearance.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="appearance">
-            <option value="auto">{{ $t('settings.appearance.auto') }}</option>
-            <option value="light"
-              >🌞 {{ $t('settings.appearance.light') }}</option
-            >
-            <option value="dark"
-              >🌚 {{ $t('settings.appearance.dark') }}</option
-            >
-          </select>
+          <Select v-model="appearance" :options="appearanceOptions" />
         </div>
       </div>
       <div class="item">
@@ -64,20 +48,7 @@
           <div class="title"> {{ $t('settings.themeColor.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="themeColor">
-            <option value="default">
-              {{ $t('settings.themeColor.default') }}
-            </option>
-            <option value="sunset">
-              {{ $t('settings.themeColor.sunset') }}
-            </option>
-            <option value="ocean">
-              {{ $t('settings.themeColor.ocean') }}
-            </option>
-            <option value="forest">
-              {{ $t('settings.themeColor.forest') }}
-            </option>
-          </select>
+          <Select v-model="themeColor" :options="themeColorOptions" />
         </div>
       </div>
       <div v-if="isDesktop" class="item">
@@ -85,11 +56,7 @@
           <div class="title"> {{ $t('settings.trayIcon.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="trayIconTheme">
-            <option value="auto">{{ $t('settings.trayIcon.auto') }}</option>
-            <option value="light">{{ $t('settings.trayIcon.light') }}</option>
-            <option value="dark">{{ $t('settings.trayIcon.dark') }}</option>
-          </select>
+          <Select v-model="trayIconTheme" :options="trayIconOptions" />
         </div>
       </div>
       <div class="item">
@@ -99,23 +66,7 @@
           </div>
         </div>
         <div class="right">
-          <select v-model="musicLanguage">
-            <option value="all">{{
-              $t('settings.MusicGenrePreference.none')
-            }}</option>
-            <option value="zh">{{
-              $t('settings.MusicGenrePreference.mandarin')
-            }}</option>
-            <option value="ea">{{
-              $t('settings.MusicGenrePreference.western')
-            }}</option>
-            <option value="jp">{{
-              $t('settings.MusicGenrePreference.japanese')
-            }}</option>
-            <option value="kr">{{
-              $t('settings.MusicGenrePreference.korean')
-            }}</option>
-          </select>
+          <Select v-model="musicLanguage" :options="musicLanguageOptions" />
         </div>
       </div>
 
@@ -124,21 +75,7 @@
           <div class="title"> {{ $t('settings.musicQuality.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="musicQuality">
-            <option :value="128000">
-              {{ $t('settings.musicQuality.low') }} - 128Kbps
-            </option>
-            <option :value="192000">
-              {{ $t('settings.musicQuality.medium') }} - 192Kbps
-            </option>
-            <option :value="320000">
-              {{ $t('settings.musicQuality.high') }} - 320Kbps
-            </option>
-            <option value="flac">
-              {{ $t('settings.musicQuality.lossless') }} - FLAC
-            </option>
-            <option :value="999000">Hi-Res</option>
-          </select>
+          <Select v-model="musicQuality" :options="musicQualityOptions" />
         </div>
       </div>
       <div v-if="isDesktop" class="item">
@@ -146,21 +83,7 @@
           <div class="title"> {{ $t('settings.deviceSelector') }} </div>
         </div>
         <div class="right">
-          <select v-model="outputDevice">
-            <option
-              v-for="device in allOutputDevices"
-              :key="device.deviceId"
-              :value="device.deviceId"
-              :selected="device.deviceId == outputDevice"
-            >
-              {{
-                device.deviceId === 'default' &&
-                device.label === 'settings.permissionRequired'
-                  ? $t('settings.permissionRequired')
-                  : device.label
-              }}
-            </option>
-          </select>
+          <Select v-model="outputDevice" :options="outputDeviceOptions" />
         </div>
       </div>
 
@@ -209,28 +132,22 @@
         <div class="left">
           <div class="title"> {{ $t('settings.cacheLimit.text') }} </div>
         </div>
-        <div class="right">
-          <select v-model="cacheLimitSelection">
-            <option
-              v-for="preset in cacheLimitPresets"
-              :key="preset"
-              :value="preset"
-            >
-              {{ preset / 1024 }}GB
-            </option>
-            <option value="custom">
-              {{ $t('settings.cacheLimit.custom') }}
-            </option>
-          </select>
-          <template v-if="cacheLimitSelection === 'custom'">
-            <input
-              v-model.number="cacheLimitCustomGb"
-              class="cache-limit-input"
-              type="number"
-              min="1"
-              @input="cacheLimitConfirmPending = false"
-            />
-            <span>GB</span>
+        <div class="right cache-limit-control">
+          <Select v-model="cacheLimitSelection" :options="cacheLimitOptions" />
+          <div
+            v-if="cacheLimitSelection === 'custom'"
+            class="cache-limit-custom"
+          >
+            <div class="cache-limit-input-wrapper">
+              <input
+                v-model.number="cacheLimitCustomGb"
+                class="cache-limit-input"
+                type="number"
+                min="1"
+                @input="cacheLimitConfirmPending = false"
+              />
+              <span class="cache-limit-unit">GB</span>
+            </div>
             <button @click="applyCustomCacheLimit">
               {{
                 cacheLimitConfirmPending
@@ -238,7 +155,7 @@
                   : $t('settings.cacheLimit.apply')
               }}
             </button>
-          </template>
+          </div>
         </div>
       </div>
       <div v-if="isDesktop" class="item">
@@ -281,20 +198,10 @@
           <div class="title">{{ $t('settings.lyricsBackground.text') }}</div>
         </div>
         <div class="right">
-          <select v-model="lyricsBackground">
-            <option :value="false">
-              {{ $t('settings.lyricsBackground.off') }}
-            </option>
-            <option :value="true">
-              {{ $t('settings.lyricsBackground.on') }}
-            </option>
-            <option value="blur">
-              {{ $t('settings.lyricsBackground.blur') }}
-            </option>
-            <option value="dynamic">
-              {{ $t('settings.lyricsBackground.dynamic') }}
-            </option>
-          </select>
+          <Select
+            v-model="lyricsBackground"
+            :options="lyricsBackgroundOptions"
+          />
         </div>
       </div>
       <div class="item">
@@ -318,20 +225,7 @@
           <div class="title"> {{ $t('settings.lyricFontSize.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="lyricFontSize">
-            <option :value="16">
-              {{ $t('settings.lyricFontSize.small') }} - 16px
-            </option>
-            <option :value="22">
-              {{ $t('settings.lyricFontSize.medium') }} - 22px
-            </option>
-            <option :value="28">
-              {{ $t('settings.lyricFontSize.large') }} - 28px
-            </option>
-            <option :value="36">
-              {{ $t('settings.lyricFontSize.xlarge') }} - 36px
-            </option>
-          </select>
+          <Select v-model="lyricFontSize" :options="lyricFontSizeOptions" />
         </div>
       </div>
       <section v-if="isDesktop" class="unm-configuration">
@@ -410,14 +304,7 @@
             <div class="title"> {{ $t('settings.unm.searchMode.title') }} </div>
           </div>
           <div class="right">
-            <select v-model="unmSearchMode">
-              <option value="fast-first">
-                {{ $t('settings.unm.searchMode.fast') }}
-              </option>
-              <option value="order-first">
-                {{ $t('settings.unm.searchMode.order') }}
-              </option>
-            </select>
+            <Select v-model="unmSearchMode" :options="unmSearchModeOptions" />
           </div>
         </div>
 
@@ -546,17 +433,7 @@
           <div class="title"> {{ $t('settings.closeAppOption.text') }} </div>
         </div>
         <div class="right">
-          <select v-model="closeAppOption">
-            <option value="ask">
-              {{ $t('settings.closeAppOption.ask') }}
-            </option>
-            <option value="exit">
-              {{ $t('settings.closeAppOption.exit') }}
-            </option>
-            <option value="minimizeToTray">
-              {{ $t('settings.closeAppOption.minimizeToTray') }}
-            </option>
-          </select>
+          <Select v-model="closeAppOption" :options="closeAppOptionOptions" />
         </div>
       </div>
 
@@ -730,11 +607,7 @@
             <div class="title"> {{ $t('settings.proxy.protocol') }} </div>
           </div>
           <div class="right">
-            <select v-model="proxyProtocol">
-              <option value="noProxy">{{ $t('settings.proxy.off') }}</option>
-              <option value="HTTP">{{ $t('settings.proxy.http') }}</option>
-              <option value="HTTPS">{{ $t('settings.proxy.https') }}</option>
-            </select>
+            <Select v-model="proxyProtocol" :options="proxyProtocolOptions" />
           </div>
         </div>
         <div id="proxy-form" :class="{ disabled: proxyProtocol === 'noProxy' }">
@@ -919,6 +792,8 @@
 import { defineComponent } from 'vue';
 import { mapActions, mapState } from 'pinia';
 import { useAppStore } from '@/stores/app';
+import Select from '@/components/Select.vue';
+import type { SelectOption } from '@/components/Select.vue';
 import { isLooseLoggedIn, doLogout } from '@/utils/auth';
 import { auth as lastfmAuth } from '@/api/lastfm';
 import {
@@ -1013,6 +888,7 @@ interface OutputDevice {
 
 export default defineComponent({
   name: 'Settings',
+  components: { Select },
   data() {
     return {
       localeOptions: LOCALE_OPTIONS,
@@ -1054,6 +930,185 @@ export default defineComponent({
   },
   computed: {
     ...mapState(useAppStore, ['player', 'settings', 'data', 'lastfm']),
+    langOptions(): SelectOption[] {
+      return this.localeOptions.map(option => ({
+        value: option.code,
+        label: option.label,
+      }));
+    },
+    appearanceOptions(): SelectOption[] {
+      return [
+        { value: 'auto', label: String(this.$t('settings.appearance.auto')) },
+        { value: 'light', label: `🌞 ${this.$t('settings.appearance.light')}` },
+        { value: 'dark', label: `🌚 ${this.$t('settings.appearance.dark')}` },
+      ];
+    },
+    themeColorOptions(): SelectOption[] {
+      return [
+        {
+          value: 'default',
+          label: String(this.$t('settings.themeColor.default')),
+        },
+        {
+          value: 'sunset',
+          label: String(this.$t('settings.themeColor.sunset')),
+        },
+        { value: 'ocean', label: String(this.$t('settings.themeColor.ocean')) },
+        {
+          value: 'forest',
+          label: String(this.$t('settings.themeColor.forest')),
+        },
+      ];
+    },
+    trayIconOptions(): SelectOption[] {
+      return [
+        { value: 'auto', label: String(this.$t('settings.trayIcon.auto')) },
+        { value: 'light', label: String(this.$t('settings.trayIcon.light')) },
+        { value: 'dark', label: String(this.$t('settings.trayIcon.dark')) },
+      ];
+    },
+    musicLanguageOptions(): SelectOption[] {
+      return [
+        {
+          value: 'all',
+          label: String(this.$t('settings.MusicGenrePreference.none')),
+        },
+        {
+          value: 'zh',
+          label: String(this.$t('settings.MusicGenrePreference.mandarin')),
+        },
+        {
+          value: 'ea',
+          label: String(this.$t('settings.MusicGenrePreference.western')),
+        },
+        {
+          value: 'jp',
+          label: String(this.$t('settings.MusicGenrePreference.japanese')),
+        },
+        {
+          value: 'kr',
+          label: String(this.$t('settings.MusicGenrePreference.korean')),
+        },
+      ];
+    },
+    musicQualityOptions(): SelectOption[] {
+      return [
+        {
+          value: 128000,
+          label: `${this.$t('settings.musicQuality.low')} - 128Kbps`,
+        },
+        {
+          value: 192000,
+          label: `${this.$t('settings.musicQuality.medium')} - 192Kbps`,
+        },
+        {
+          value: 320000,
+          label: `${this.$t('settings.musicQuality.high')} - 320Kbps`,
+        },
+        {
+          value: 'flac',
+          label: `${this.$t('settings.musicQuality.lossless')} - FLAC`,
+        },
+        { value: 999000, label: 'Hi-Res' },
+      ];
+    },
+    outputDeviceOptions(): SelectOption[] {
+      return this.allOutputDevices.map(device => ({
+        value: device.deviceId,
+        label:
+          device.deviceId === 'default' &&
+          device.label === 'settings.permissionRequired'
+            ? String(this.$t('settings.permissionRequired'))
+            : device.label,
+      }));
+    },
+    cacheLimitOptions(): SelectOption[] {
+      return [
+        ...CACHE_LIMIT_PRESETS_MB.map(preset => ({
+          value: preset,
+          label: `${preset / 1024}GB`,
+        })),
+        {
+          value: 'custom' as const,
+          label: String(this.$t('settings.cacheLimit.custom')),
+        },
+      ];
+    },
+    lyricsBackgroundOptions(): SelectOption[] {
+      return [
+        {
+          value: false,
+          label: String(this.$t('settings.lyricsBackground.off')),
+        },
+        {
+          value: true,
+          label: String(this.$t('settings.lyricsBackground.on')),
+        },
+        {
+          value: 'blur',
+          label: String(this.$t('settings.lyricsBackground.blur')),
+        },
+        {
+          value: 'dynamic',
+          label: String(this.$t('settings.lyricsBackground.dynamic')),
+        },
+      ];
+    },
+    lyricFontSizeOptions(): SelectOption[] {
+      return [
+        {
+          value: 16,
+          label: `${this.$t('settings.lyricFontSize.small')} - 16px`,
+        },
+        {
+          value: 22,
+          label: `${this.$t('settings.lyricFontSize.medium')} - 22px`,
+        },
+        {
+          value: 28,
+          label: `${this.$t('settings.lyricFontSize.large')} - 28px`,
+        },
+        {
+          value: 36,
+          label: `${this.$t('settings.lyricFontSize.xlarge')} - 36px`,
+        },
+      ];
+    },
+    unmSearchModeOptions(): SelectOption[] {
+      return [
+        {
+          value: 'fast-first',
+          label: String(this.$t('settings.unm.searchMode.fast')),
+        },
+        {
+          value: 'order-first',
+          label: String(this.$t('settings.unm.searchMode.order')),
+        },
+      ];
+    },
+    closeAppOptionOptions(): SelectOption[] {
+      return [
+        {
+          value: 'ask',
+          label: String(this.$t('settings.closeAppOption.ask')),
+        },
+        {
+          value: 'exit',
+          label: String(this.$t('settings.closeAppOption.exit')),
+        },
+        {
+          value: 'minimizeToTray',
+          label: String(this.$t('settings.closeAppOption.minimizeToTray')),
+        },
+      ];
+    },
+    proxyProtocolOptions(): SelectOption[] {
+      return [
+        { value: 'noProxy', label: String(this.$t('settings.proxy.off')) },
+        { value: 'HTTP', label: String(this.$t('settings.proxy.http')) },
+        { value: 'HTTPS', label: String(this.$t('settings.proxy.https')) },
+      ];
+    },
     isDesktop() {
       return isDesktopRuntime;
     },
@@ -1537,9 +1592,6 @@ export default defineComponent({
         trimTrackSourceCache().then(() => this.countDBSize());
       },
     },
-    cacheLimitPresets() {
-      return CACHE_LIMIT_PRESETS_MB;
-    },
     cacheLimitSelection: {
       get(): number | 'custom' {
         if (this.cacheLimitCustomSelected) return 'custom';
@@ -1805,7 +1857,10 @@ export default defineComponent({
       if (!Number.isFinite(gigabytes) || gigabytes < 1) return;
       const megabytes = gigabytes * 1024;
       // Oversized limits need a second click on the "are you sure?" button.
-      if (megabytes > CACHE_LIMIT_CONFIRM_MB && !this.cacheLimitConfirmPending) {
+      if (
+        megabytes > CACHE_LIMIT_CONFIRM_MB &&
+        !this.cacheLimitConfirmPending
+      ) {
         this.cacheLimitConfirmPending = true;
         return;
       }
@@ -2253,29 +2308,6 @@ h3 {
   }
 }
 
-select {
-  min-width: 192px;
-  max-width: 600px;
-  font-weight: 600;
-  border: none;
-  padding: 8px 12px 8px 12px;
-  border-radius: 8px;
-  color: var(--color-text);
-  background: var(--color-secondary-bg);
-  appearance: none;
-  &:focus {
-    outline: none;
-    color: var(--color-primary);
-    background: var(--color-primary-bg);
-  }
-}
-
-// Keep native affordances on WebView2 and WebKitGTK.
-:global(body[data-platform='win32'] .settings-page select),
-:global(body[data-platform='linux'] .settings-page select) {
-  appearance: auto;
-}
-
 button {
   color: var(--color-text);
   background: var(--color-secondary-bg);
@@ -2458,5 +2490,83 @@ input[type='number'] {
 }
 .toggle input:checked + label:after {
   left: 26px;
+}
+
+/* 缓存上限控制区：下拉选框占第一行，自定义输入区占第二行；整体靠右对齐 */
+.cache-limit-control {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+/* 自定义输入行：输入框容器 + 应用按钮横向排列 */
+.cache-limit-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 输入框包裹容器，GB 单位绝对定位于右侧 */
+.cache-limit-input-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+/* GB 单位显示在输入框内靠右，非 placeholder 样式 */
+.cache-limit-unit {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+/* 自定义缓存上限的数字输入框，与 Select 组件保持一致的视觉 */
+.cache-limit-input {
+  font-weight: 600;
+  width: 96px;
+  /* 右侧让出 GB 单位的空间 */
+  padding: 8px 32px 8px 12px;
+  background: var(--color-secondary-bg);
+  color: var(--color-text);
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  text-align: left;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+
+  &:hover {
+    color: var(--color-primary);
+  }
+
+  &:focus {
+    outline: none;
+    color: var(--color-primary);
+    /* 白色 ring 与 Select 下拉菜单保持一致，在深色模式下勾勒边缘 */
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+
+  /* 移除原生 spinner，保持与 Select 统一的外观 */
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  -moz-appearance: textfield;
+}
+
+/* hover/focus 时 GB 单位随输入框变色 */
+.cache-limit-input-wrapper:hover .cache-limit-unit,
+.cache-limit-input:focus ~ .cache-limit-unit {
+  color: var(--color-primary);
+  opacity: 0.8;
 }
 </style>
