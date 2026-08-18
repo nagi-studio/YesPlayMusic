@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::thread::{ResizeRequest, ResizeResponse, ThreadProtocol};
-use ratatui_image::StatefulImage;
+use ratatui_image::{FontSize, StatefulImage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use yesplaymusic_core::cache::{
@@ -69,14 +69,18 @@ pub enum SelfUpdate {
 }
 
 // Terminal graphics never upscale (Resize::Fit): the source must out-resolve
-// the cover area or a fullscreen retina window shows a half-sized cover.
-// 1024px covers a ~32-row cover column at typical retina cell sizes.
+// the cover box in real pixels or the artwork floats inside it. Buckets,
+// because the cache key embeds the edge — a continuous value would re-fetch
+// every cover on every window drag.
 const COVER_SOURCE_EDGE: u32 = 1024;
+const COVER_SOURCE_EDGES: [u32; 4] = [1024, 1536, 2048, 3072];
 pub(crate) const PREVIEW_CELLS: (u16, u16) = (22, 11);
 const HOT_PIXEL_COVER_LIMIT: usize = 64;
+const GRAPHICS_GEOMETRY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 struct OriginalCover {
     picker: Picker,
+    background: Option<Rgba<u8>>,
     protocol: ThreadProtocol,
     generation: Option<u64>,
     pending: Option<PendingOriginalCover>,
@@ -96,6 +100,7 @@ impl OriginalCover {
     fn new(picker: Picker, requests: mpsc::UnboundedSender<ResizeRequest>) -> Self {
         Self {
             picker,
+            background: None,
             protocol: ThreadProtocol::new(requests, None),
             generation: None,
             pending: None,
@@ -110,6 +115,7 @@ impl OriginalCover {
     ) -> Self {
         Self {
             picker,
+            background: None,
             protocol: ThreadProtocol::new(requests, None),
             generation: None,
             pending: None,
@@ -121,6 +127,20 @@ impl OriginalCover {
         self.generation = None;
         self.protocol.empty_protocol();
         self.cancel_pending();
+    }
+
+    fn refresh_font_size(&mut self, font_size: FontSize) {
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(font_size);
+        picker.set_protocol_type(self.picker.protocol_type());
+        picker.set_background_color(self.background);
+        self.picker = picker;
+
+        // Every StatefulProtocol owns a copy of the old font size. Bump the
+        // ThreadProtocol ids before dropping the pending handover so workers
+        // cannot install an encoding produced for the previous pixel grid.
+        self.clear();
+        self.pending = None;
     }
 
     fn replace(&mut self, generation: u64, image: DynamicImage) {
@@ -231,8 +251,105 @@ impl OriginalCover {
             Color::Rgb(red, green, blue) => Some(Rgba([red, green, blue, 255])),
             _ => None,
         };
+        self.background = color;
         self.picker.set_background_color(color);
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CellPixelSize {
+    width: u16,
+    height: u16,
+}
+
+impl CellPixelSize {
+    fn from_window_size(size: &crossterm::terminal::WindowSize) -> Option<Self> {
+        let width = size.width.checked_div(size.columns)?;
+        let height = size.height.checked_div(size.rows)?;
+        (width > 0 && height > 0).then_some(Self { width, height })
+    }
+
+    fn from_font_size(size: FontSize) -> Self {
+        Self {
+            width: size.width,
+            height: size.height,
+        }
+    }
+
+    fn into_font_size(self) -> FontSize {
+        FontSize::new(self.width, self.height)
+    }
+}
+
+struct GraphicsGeometryTracker {
+    // Some terminals report a different pixel convention through ioctl than
+    // through CSI 16 t. Preserve the queried size and apply only ioctl's
+    // observed scale ratio instead of replacing it with an absolute value.
+    baseline_reported: CellPixelSize,
+    baseline_font: CellPixelSize,
+    current_reported: CellPixelSize,
+    current_font: CellPixelSize,
+}
+
+impl GraphicsGeometryTracker {
+    fn query(font_size: FontSize) -> Option<Self> {
+        let window = crossterm::terminal::window_size().ok()?;
+        Self::from_window_size(font_size, &window)
+    }
+
+    fn from_window_size(
+        font_size: FontSize,
+        window: &crossterm::terminal::WindowSize,
+    ) -> Option<Self> {
+        let reported = CellPixelSize::from_window_size(window)?;
+        let font = CellPixelSize::from_font_size(font_size);
+        Some(Self {
+            baseline_reported: reported,
+            baseline_font: font,
+            current_reported: reported,
+            current_font: font,
+        })
+    }
+
+    fn poll(&mut self) -> Option<FontSize> {
+        let window = crossterm::terminal::window_size().ok()?;
+        self.observe(&window)
+    }
+
+    fn observe(&mut self, window: &crossterm::terminal::WindowSize) -> Option<FontSize> {
+        let reported = CellPixelSize::from_window_size(window)?;
+        if reported == self.current_reported {
+            return None;
+        }
+        let font = CellPixelSize {
+            width: scaled_dimension(
+                self.baseline_font.width,
+                reported.width,
+                self.baseline_reported.width,
+            )?,
+            height: scaled_dimension(
+                self.baseline_font.height,
+                reported.height,
+                self.baseline_reported.height,
+            )?,
+        };
+        self.current_reported = reported;
+        if font == self.current_font {
+            return None;
+        }
+        self.current_font = font;
+        Some(font.into_font_size())
+    }
+}
+
+fn scaled_dimension(baseline: u16, current: u16, reported_baseline: u16) -> Option<u16> {
+    let numerator = u32::from(baseline)
+        .checked_mul(u32::from(current))?
+        .checked_add(u32::from(reported_baseline) / 2)?;
+    let scaled = numerator.checked_div(u32::from(reported_baseline))?;
+    u16::try_from(scaled)
+        .ok()
+        .filter(|dimension| *dimension > 0)
 }
 
 fn select_graphics_picker(picker: Option<Picker>) -> Option<Picker> {
@@ -686,6 +803,58 @@ impl AppState {
         self.theme.selection_style(self.terminal_background)
     }
 
+    /// Cell pixel size when a terminal-graphics cover is what actually gets
+    /// drawn. Half-block art packs two sub-pixels into a cell and is square at
+    /// width/2 rows whatever the font is; a real image is measured in pixels,
+    /// so it needs the cell's true aspect.
+    fn graphics_cell_size(&self) -> Option<FontSize> {
+        if self.config.cover_mode != CoverMode::Original {
+            return None;
+        }
+        self.original_cover
+            .as_ref()
+            .map(|cover| cover.picker.font_size())
+            .filter(|font| font.width > 0 && font.height > 0)
+    }
+
+    /// Rows that render `width` columns as a square. A 1:2 cell is only an
+    /// approximation — this terminal reports 24×53, so the assumed grid came
+    /// out a tenth taller than the artwork and left the cover sitting high in
+    /// a box with dead space under it.
+    fn square_cover_rows(&self, width: u16) -> u16 {
+        let Some(font) = self.graphics_cell_size() else {
+            return width / 2;
+        };
+        let rows = u32::from(width) * u32::from(font.width) / u32::from(font.height);
+        u16::try_from(rows).unwrap_or(u16::MAX).max(1)
+    }
+
+    /// Columns that render `rows` as a square: the inverse of
+    /// [`Self::square_cover_rows`].
+    fn square_cover_cols(&self, rows: u16) -> u16 {
+        let Some(font) = self.graphics_cell_size() else {
+            return rows * 2;
+        };
+        let cols = u32::from(rows) * u32::from(font.height) / u32::from(font.width);
+        u16::try_from(cols).unwrap_or(u16::MAX).max(1)
+    }
+
+    /// Resolution to fetch artwork at, from the cover box's real pixel size.
+    /// A 24x53 cell grid turns a 59x26 box into 1416x1378 px, which a 1024px
+    /// source cannot fill — the image then sits undersized inside its column.
+    fn cover_source_edge(&self) -> u32 {
+        let Some(font) = self.graphics_cell_size() else {
+            return COVER_SOURCE_EDGE;
+        };
+        let (cols, rows) = self.desired_cover_cells();
+        let needed =
+            (u32::from(cols) * u32::from(font.width)).max(u32::from(rows) * u32::from(font.height));
+        COVER_SOURCE_EDGES
+            .into_iter()
+            .find(|edge| *edge >= needed)
+            .unwrap_or(COVER_SOURCE_EDGES[COVER_SOURCE_EDGES.len() - 1])
+    }
+
     /// The cover cell grid that fits the current terminal and layout.
     /// Height-driven in Side layout, width-bounded in Stacked.
     fn desired_cover_cells(&self) -> (u16, u16) {
@@ -726,13 +895,13 @@ impl AppState {
             ui::max_content_width(self.view),
         )
         .width;
-        let width = (height * 2).min(match self.layout {
+        let width = self.square_cover_cols(height).min(match self.layout {
             PlayLayout::Side => content_width
                 .saturating_sub(ui::now_playing::SIDE_PANEL_RESERVED_COLS)
                 .max(16),
             PlayLayout::Stacked => content_width.saturating_sub(4).max(16),
         });
-        (width, width / 2)
+        (width, self.square_cover_rows(width))
     }
 
     fn sidebar_visible(&self) -> bool {
@@ -1088,6 +1257,33 @@ impl AppState {
         }
     }
 
+    fn refresh_graphics_geometry(&mut self, font_size: FontSize, fx: &Effects) {
+        for cover in [
+            &mut self.original_cover,
+            &mut self.selected_original_cover,
+            &mut self.bar_original_cover,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            cover.refresh_font_size(font_size);
+        }
+        // Clear the terminal viewport before the next draw so pixels from an
+        // old oversized graphics layer cannot survive outside its cell box.
+        self.force_redraw = true;
+
+        if self.config.cover_mode != CoverMode::Original {
+            return;
+        }
+        if let Some(row) = self.active_row.clone() {
+            self.load_playing_cover(fx, &row);
+        }
+        // The selection key normally suppresses duplicate loads. Forget it
+        // here because its terminal protocol was deliberately invalidated.
+        self.selected_cover.key = None;
+        self.reconcile_selected_cover(fx);
+    }
+
     fn load_idle_art(&mut self, fx: &Effects) {
         if let Some(bytes) = self.idle_bytes.clone() {
             spawn_render_idle(
@@ -1229,13 +1425,15 @@ impl AppState {
         pic_url: &str,
         cells: (u16, u16),
     ) -> CoverRenderRequest {
+        let edge = self.cover_source_edge();
         CoverRenderRequest {
             surface,
             generation,
             cells,
             style_revision: self.style_revision,
             song_id,
-            source_key: CoverCache::original_key(pic_url, COVER_SOURCE_EDGE),
+            source_key: CoverCache::original_key(pic_url, edge),
+            source_edge: edge,
         }
     }
 
@@ -1974,7 +2172,9 @@ fn spawn_cover_loads(fx: &Effects, loads: Vec<CoverLoad>, pic_url: String) {
         if pending.is_empty() {
             return;
         }
-        let bytes = match api::fetch_cover(&pic_url, COVER_SOURCE_EDGE).await {
+        // Every load in this batch shares the request that picked the edge.
+        let edge = pending[0].request.source_edge;
+        let bytes = match api::fetch_cover(&pic_url, edge).await {
             Ok(bytes) => bytes,
             Err(error) => {
                 tracing::warn!(%error, "cover fetch failed");
@@ -2103,7 +2303,7 @@ async fn download_and_send_cover(
     load: CoverLoad,
     pic_url: String,
 ) {
-    let bytes = match api::fetch_cover(&pic_url, COVER_SOURCE_EDGE).await {
+    let bytes = match api::fetch_cover(&pic_url, load.request.source_edge).await {
         Ok(bytes) => bytes,
         Err(error) => {
             tracing::warn!(%error, "cover fetch failed");
@@ -2289,6 +2489,9 @@ fn spawn_cover_prefetch(
                     style_revision,
                     song_id: row.id,
                     source_key: CoverCache::original_key(pic_url, COVER_SOURCE_EDGE),
+                    // The preview is a fixed 22x11 box, so the shipped floor
+                    // always out-resolves it.
+                    source_edge: COVER_SOURCE_EDGE,
                 },
                 style,
             };
@@ -2299,7 +2502,7 @@ fn spawn_cover_prefetch(
                 {
                     continue;
                 }
-                let Ok(bytes) = api::fetch_cover(pic_url, COVER_SOURCE_EDGE).await else {
+                let Ok(bytes) = api::fetch_cover(pic_url, load.request.source_edge).await else {
                     continue;
                 };
                 let _ = process_cover(Some(cache.clone()), &load, bytes, true).await;
@@ -2309,7 +2512,8 @@ fn spawn_cover_prefetch(
             let cover = match load_cached_pixel(cache.clone(), &load).await {
                 Some(cover) => cover,
                 None => {
-                    let Ok(bytes) = api::fetch_cover(pic_url, COVER_SOURCE_EDGE).await else {
+                    let Ok(bytes) = api::fetch_cover(pic_url, load.request.source_edge).await
+                    else {
                         continue;
                     };
                     let Some(EitherCover::Pixel(cover)) =
@@ -2471,13 +2675,26 @@ async fn event_loop(
         terminal_is_light,
     ));
     let picker = query_graphics_picker(theme.bg);
+    let mut graphics_geometry = picker
+        .as_ref()
+        .and_then(|picker| GraphicsGeometryTracker::query(picker.font_size()));
     let original_cover = picker.clone().map(|picker| {
-        OriginalCover::buffered(picker, playing_resize_tx, playing_pending_resize_tx)
+        let mut cover =
+            OriginalCover::buffered(picker, playing_resize_tx, playing_pending_resize_tx);
+        cover.set_background(theme.bg);
+        cover
     });
     let selected_original_cover = picker.clone().map(|picker| {
-        OriginalCover::buffered(picker, selected_resize_tx, selected_pending_resize_tx)
+        let mut cover =
+            OriginalCover::buffered(picker, selected_resize_tx, selected_pending_resize_tx);
+        cover.set_background(theme.bg);
+        cover
     });
-    let bar_original_cover = picker.map(|picker| OriginalCover::new(picker, bar_resize_tx));
+    let bar_original_cover = picker.map(|picker| {
+        let mut cover = OriginalCover::new(picker, bar_resize_tx);
+        cover.set_background(theme.bg);
+        cover
+    });
     spawn_resize_worker(playing_resize_rx, playing_responses_tx);
     spawn_resize_worker(selected_resize_rx, selected_responses_tx);
     spawn_resize_worker(selected_pending_resize_rx, selected_pending_responses_tx);
@@ -2577,6 +2794,8 @@ async fn event_loop(
     let mut hits = ui::Hits::default();
     let mut spectrum_ticks = tokio::time::interval(Duration::from_millis(50));
     spectrum_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut graphics_geometry_ticks = tokio::time::interval(GRAPHICS_GEOMETRY_POLL_INTERVAL);
+    graphics_geometry_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     terminal.draw(|frame| ui::draw(frame, &mut state, &mut hits))?;
     let mut ui_tick = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_millis(120),
@@ -2654,6 +2873,14 @@ async fn event_loop(
                     state.config.spectrum_stereo,
                     state.config.spectrum_db,
                 );
+            }
+            _ = graphics_geometry_ticks.tick(), if graphics_geometry.is_some() => {
+                let font_size = graphics_geometry
+                    .as_mut()
+                    .and_then(GraphicsGeometryTracker::poll);
+                if let Some(font_size) = font_size {
+                    state.refresh_graphics_geometry(font_size, &fx);
+                }
             }
         }
         if state.should_quit {

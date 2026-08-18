@@ -23,6 +23,9 @@ pub struct CoverRenderRequest {
     pub style_revision: u64,
     pub song_id: i64,
     pub source_key: String,
+    /// Longest edge to fetch the artwork at. Terminal graphics never upscale,
+    /// so this has to out-resolve the cover box in real pixels.
+    pub source_edge: u32,
 }
 
 /// How the in-app updater ended. "Up to date" is not a failure, so it stays

@@ -34,6 +34,77 @@ fn effects(directory: &TempDir) -> Effects {
     }
 }
 
+fn window_size(
+    columns: u16,
+    rows: u16,
+    width: u16,
+    height: u16,
+) -> crossterm::terminal::WindowSize {
+    crossterm::terminal::WindowSize {
+        columns,
+        rows,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn graphics_geometry_tracks_pixel_scale_without_a_cell_grid_resize() {
+    // ioctl may use a different absolute pixel convention than CSI 16 t;
+    // only the 2x change is applied to the query's calibrated 10x20 size.
+    let baseline = window_size(100, 40, 800, 640);
+    let mut tracker =
+        GraphicsGeometryTracker::from_window_size(FontSize::new(10, 20), &baseline).unwrap();
+
+    assert!(tracker.observe(&baseline).is_none());
+    let retina = tracker
+        .observe(&window_size(100, 40, 1_600, 1_280))
+        .expect("backing-scale change");
+    assert_eq!((retina.width, retina.height), (20, 40));
+
+    let external = tracker
+        .observe(&baseline)
+        .expect("return to the original display");
+    assert_eq!((external.width, external.height), (10, 20));
+}
+
+#[test]
+fn graphics_geometry_ignores_unavailable_pixel_dimensions() {
+    assert!(GraphicsGeometryTracker::from_window_size(
+        FontSize::new(10, 20),
+        &window_size(100, 40, 0, 0),
+    )
+    .is_none());
+}
+
+#[test]
+fn refreshing_graphics_geometry_rejects_old_resize_work() {
+    #[allow(deprecated)]
+    let mut picker = Picker::from_fontsize(FontSize::new(10, 20));
+    picker.set_protocol_type(ProtocolType::Halfblocks);
+    let (requests, mut worker) = mpsc::unbounded_channel();
+    let mut cover = OriginalCover::new(picker, requests);
+    let image = DynamicImage::new_rgba8(1_000, 1_000);
+    cover.replace(1, image.clone());
+    ratatui_image::ResizeEncodeRender::resize_encode(
+        &mut cover.protocol,
+        &ratatui_image::Resize::Fit(None),
+        PREVIEW_CELLS.into(),
+    );
+    let stale = worker.try_recv().expect("old-geometry resize request");
+
+    cover.refresh_font_size(FontSize::new(20, 20));
+    cover.replace(1, image);
+    let resized = cover
+        .protocol
+        .size_for(ratatui_image::Resize::Fit(None), PREVIEW_CELLS.into())
+        .expect("replacement protocol");
+    assert_eq!((resized.width, resized.height), (11, 11));
+    assert!(!cover
+        .protocol
+        .update_resized_protocol(stale.resize_encode().unwrap()));
+}
+
 fn raw_key(code: KeyCode) -> Action {
     Action::RawKey(KeyEvent::new(code, KeyModifiers::NONE))
 }
@@ -161,6 +232,55 @@ fn a_centred_meta_line_puts_its_link_under_the_visible_text() {
     assert!(meta_link_rect(area, 9, false, 12, 2, 10).is_none());
     assert!(meta_link_rect(area, 1, false, 2, 2, 0).is_none());
     assert!(meta_link_rect(Rect::new(0, 0, 3, 6), 1, false, 5, 3, 2).is_none());
+}
+
+#[test]
+fn the_source_resolution_follows_the_cover_box_in_real_pixels() {
+    let mut state = AppState::new(&Config::default());
+    // Half-block art is generated locally, so the shipped floor is enough.
+    assert_eq!(state.cover_source_edge(), COVER_SOURCE_EDGE);
+
+    state.config.cover_mode = CoverMode::Original;
+    state.terminal_size = (124, 32);
+    state.original_cover = Some(OriginalCover::new(
+        #[allow(deprecated)]
+        Picker::from_fontsize(FontSize::new(24, 53)),
+        tokio::sync::mpsc::unbounded_channel().0,
+    ));
+    let (cols, rows) = state.desired_cover_cells();
+    let needed = (u32::from(cols) * 24).max(u32::from(rows) * 53);
+    let edge = state.cover_source_edge();
+    // Terminal graphics never upscale: anything short of the box leaves the
+    // artwork floating inside its own column.
+    assert!(edge >= needed, "{edge} < {needed}");
+    // Bucketed, so dragging the window does not re-fetch every cover.
+    assert!(COVER_SOURCE_EDGES.contains(&edge));
+}
+
+#[test]
+fn the_cover_box_is_square_in_pixels_not_in_assumed_cells() {
+    let mut state = AppState::new(&Config::default());
+    // No graphics picker: half-block art packs two sub-pixels per cell, so a
+    // square is width/2 rows regardless of the font.
+    assert_eq!(state.square_cover_rows(54), 27);
+    assert_eq!(state.square_cover_cols(27), 54);
+
+    // A real terminal reported 24x53 pixel cells, which is a tenth taller than
+    // the 1:2 the block characters imply. Assuming 1:2 there gave the cover a
+    // box 27 rows tall for artwork that could only fill 24, and the image sat
+    // at the top of it with dead space underneath.
+    state.config.cover_mode = CoverMode::Original;
+    state.original_cover = Some(OriginalCover::new(
+        // The only constructor that takes a known font size; the query-based
+        // ones need a live terminal.
+        #[allow(deprecated)]
+        Picker::from_fontsize(FontSize::new(24, 53)),
+        tokio::sync::mpsc::unbounded_channel().0,
+    ));
+    assert_eq!(state.square_cover_rows(54), 24);
+    assert_eq!(state.square_cover_cols(24), 53);
+    // Never zero: a degenerate grid would divide by zero downstream.
+    assert_eq!(state.square_cover_rows(1), 1);
 }
 
 #[test]
@@ -2428,6 +2548,7 @@ fn cover_result_for_an_old_size_cannot_replace_the_current_cover() {
             style_revision: 3,
             song_id: 1,
             source_key: "source".into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         replacement.clone(),
     );
@@ -2445,6 +2566,7 @@ fn cover_result_for_an_old_size_cannot_replace_the_current_cover() {
             style_revision: 3,
             song_id: 1,
             source_key: "source".into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         current,
     );
@@ -2460,6 +2582,7 @@ fn cover_result_for_an_old_size_cannot_replace_the_current_cover() {
             style_revision: 3,
             song_id: 1,
             source_key: "source".into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         stale,
     );
@@ -2483,6 +2606,7 @@ fn cover_result_for_an_old_size_cannot_replace_the_current_cover() {
             style_revision: 3,
             song_id: 1,
             source_key: "source".into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         previous_theme,
     );
@@ -3115,6 +3239,7 @@ async fn small_source_covers_are_upscaled_to_fill_the_cover_area() {
             style_revision: 0,
             song_id: 1,
             source_key: "test".into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         style: CoverStyle {
             pixel: AppState::new(&Config::default()).pixel_style(),
@@ -3148,6 +3273,7 @@ async fn repeat_cover_loads_reuse_the_decoded_image() {
             style_revision: 0,
             song_id: 1,
             source_key: key.into(),
+            source_edge: COVER_SOURCE_EDGE,
         },
         style: CoverStyle {
             pixel: AppState::new(&Config::default()).pixel_style(),
