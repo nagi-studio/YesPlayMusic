@@ -399,6 +399,9 @@ struct MarqueeTarget {
     id: i64,
     title: String,
     artist: String,
+    /// The preview's third row scrolls too, so a row refreshed with a
+    /// different album has to restart rather than resume the old offset.
+    album: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -718,7 +721,11 @@ impl AppState {
             PlayLayout::Stacked => main_rows / 2,
         };
         let height = height.clamp(8, 40);
-        let content_width = ui::centered_content(Rect::new(0, 0, cols, rows)).width;
+        let content_width = ui::centered_content_for(
+            Rect::new(0, 0, cols, rows),
+            ui::max_content_width(self.view),
+        )
+        .width;
         let width = (height * 2).min(match self.layout {
             PlayLayout::Side => content_width
                 .saturating_sub(ui::now_playing::SIDE_PANEL_RESERVED_COLS)
@@ -776,6 +783,7 @@ impl AppState {
                 id: self.current_track_id.unwrap_or_default(),
                 title: now.title.clone(),
                 artist: now.artist.clone(),
+                album: now.album.clone(),
             });
         }
         if self.show_help
@@ -788,8 +796,11 @@ impl AppState {
             return None;
         }
         let (underlying, row) = self.visible_row(self.selected)?;
-        let shell_width =
-            ui::centered_content(Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1)).width;
+        let shell_width = ui::centered_content_for(
+            Rect::new(0, 0, self.terminal_size.0, self.terminal_size.1),
+            ui::max_content_width(self.view),
+        )
+        .width;
         let preview_visible = self.selection_preview_visible();
         let needs_marquee = match self.view {
             View::Library => ui::library::marquee_needed(&row, shell_width, preview_visible),
@@ -812,6 +823,7 @@ impl AppState {
             id: row.id,
             title: row.title,
             artist: row.artist,
+            album: row.album,
         })
     }
 
@@ -1318,9 +1330,7 @@ impl AppState {
 
     fn selection_preview_visible(&self) -> bool {
         let (cols, rows) = self.terminal_size;
-        let body_height = rows.saturating_sub(
-            crate::ui::HEADER_HEIGHT + crate::ui::FOOTER_HEIGHT + crate::ui::PANEL_GAP_Y * 2,
-        );
+        let body_height = crate::ui::body_rows(self, rows);
         match self.view {
             View::Library => {
                 cols >= crate::ui::library::PREVIEW_MIN_TERMINAL_WIDTH

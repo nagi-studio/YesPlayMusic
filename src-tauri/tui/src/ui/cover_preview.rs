@@ -10,10 +10,10 @@ use crate::ui::text::{needs_marquee, pad_or_marquee};
 
 const FRAME_COLUMNS: u16 = 2;
 const FRAME_ROWS: u16 = 2;
-const METADATA_ROWS: u16 = 2;
+const METADATA_ROWS: u16 = 3;
 /// Outer width: frame + horizontal panel padding + square half-block image.
 pub const WIDTH: u16 = crate::app::PREVIEW_CELLS.0 + super::PANEL_PADDING_X * 2 + FRAME_COLUMNS;
-/// Outer height: frame + square half-block image + title and artist rows.
+/// Outer height: frame + square half-block image + title, artist and album rows.
 pub const HEIGHT: u16 = crate::app::PREVIEW_CELLS.1 + FRAME_ROWS + METADATA_ROWS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +21,7 @@ struct PreviewAreas {
     image: Rect,
     title: Rect,
     artist: Rect,
+    album: Rect,
 }
 
 fn content_areas(inner: Rect) -> PreviewAreas {
@@ -40,6 +41,11 @@ fn content_areas(inner: Rect) -> PreviewAreas {
         artist: Rect {
             y: metadata_y.saturating_add(1),
             height: u16::from(metadata_height >= 2),
+            ..inner
+        },
+        album: Rect {
+            y: metadata_y.saturating_add(2),
+            height: u16::from(metadata_height >= 3),
             ..inner
         },
     }
@@ -70,15 +76,29 @@ pub fn split_preview(area: Rect, min_list_width: u16) -> (Rect, Option<Rect>) {
     (list, Some(preview))
 }
 
+/// The album row is dropped when it only repeats the title, so the marquee
+/// must judge the same text the draw does — otherwise a padded duplicate arms
+/// a scroll for a row that is never rendered.
+pub(crate) fn album_row<'a>(title: &str, album: &'a str) -> &'a str {
+    let trimmed = album.trim();
+    if trimmed == title.trim() {
+        ""
+    } else {
+        trimmed
+    }
+}
+
 pub(crate) fn metadata_needs_marquee(row: &crate::api::SongRow) -> bool {
     let width = usize::from(crate::app::PREVIEW_CELLS.0);
-    needs_marquee(&row.title, width) || needs_marquee(&row.artist, width)
+    needs_marquee(&row.title, width)
+        || needs_marquee(&row.artist, width)
+        || needs_marquee(album_row(&row.title, &row.album), width)
 }
 
 pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let metadata = state
         .visible_row(state.selected)
-        .map(|(_, row)| (row.title, row.artist));
+        .map(|(_, row)| (row.title, row.artist, row.album));
     let block = super::panel_block(&state.theme, i18n::t(Key::Cover), None);
     let inner = block.inner(area);
     let areas = content_areas(inner);
@@ -101,7 +121,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect) {
         }
     }
 
-    if let Some((title, artist)) = metadata {
+    if let Some((title, artist, album)) = metadata {
         let style = Style::new().fg(state.theme.dim);
         let marquee_frame = state.marquee_frame();
         if !areas.title.is_empty() {
@@ -127,6 +147,18 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect) {
                 areas.artist,
             );
         }
+        // Singles repeat their title as the album name; a row that says the
+        // same thing twice is noise, so it stays blank there.
+        let album = album_row(&title, &album);
+        if !areas.album.is_empty() && !album.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    pad_or_marquee(album, usize::from(areas.album.width), true, marquee_frame),
+                    Style::new().fg(state.theme.faint),
+                ))),
+                areas.album,
+            );
+        }
     }
 }
 
@@ -147,20 +179,23 @@ mod tests {
     }
 
     #[test]
-    fn preview_split_reserves_the_frame_and_two_metadata_rows() {
-        let too_short = Rect::new(7, 3, 90, 14);
+    fn preview_split_reserves_the_frame_and_every_metadata_row() {
+        let too_short = Rect::new(7, 3, 90, HEIGHT - 1);
         assert_eq!(split_preview(too_short, 62), (too_short, None));
 
-        let area = Rect::new(7, 3, 90, 15);
+        let area = Rect::new(7, 3, 90, HEIGHT);
         assert_eq!(
             split_preview(area, 62),
-            (Rect::new(7, 3, 62, 15), Some(Rect::new(71, 3, 26, 15)),)
+            (
+                Rect::new(7, 3, 62, HEIGHT),
+                Some(Rect::new(71, 3, WIDTH, HEIGHT)),
+            )
         );
     }
 
     #[test]
     fn preview_draws_a_faint_rounded_panel_with_dim_marquee_metadata() {
-        let backend = TestBackend::new(26, 15);
+        let backend = TestBackend::new(WIDTH, HEIGHT);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new(&Config::default());
         state.view = View::Library;
@@ -184,8 +219,8 @@ mod tests {
 
         assert_eq!(buffer[(0, 0)].symbol(), "╭");
         assert_eq!(buffer[(25, 0)].symbol(), "╮");
-        assert_eq!(buffer[(0, 14)].symbol(), "╰");
-        assert_eq!(buffer[(25, 14)].symbol(), "╯");
+        assert_eq!(buffer[(0, HEIGHT - 1)].symbol(), "╰");
+        assert_eq!(buffer[(WIDTH - 1, HEIGHT - 1)].symbol(), "╯");
         assert_eq!(buffer[(0, 0)].fg, theme.faint);
         let top = line_text(buffer, Rect::new(0, 0, 26, 1));
         let compact = |value: &str| {
@@ -199,12 +234,17 @@ mod tests {
             !buffer[(x, 0)].symbol().trim().is_empty() && buffer[(x, 0)].fg == theme.accent
         }));
 
-        let title = line_text(buffer, Rect::new(2, 12, 22, 1));
-        let artist = line_text(buffer, Rect::new(2, 13, 22, 1));
+        let metadata_top = HEIGHT - METADATA_ROWS - 1;
+        let title = line_text(buffer, Rect::new(2, metadata_top, 22, 1));
+        let artist = line_text(buffer, Rect::new(2, metadata_top + 1, 22, 1));
+        let album = line_text(buffer, Rect::new(2, metadata_top + 2, 22, 1));
         assert_eq!(title, "1234567890123456789012");
         assert_eq!(artist, "abcdefghijklmnopqrstuv");
-        assert!((2..24).all(|x| buffer[(x, 12)].fg == theme.dim));
-        assert!((2..24).all(|x| buffer[(x, 13)].fg == theme.dim));
+        assert_eq!(album.trim(), "Album");
+        assert!((2..24).all(|x| buffer[(x, metadata_top)].fg == theme.dim));
+        assert!((2..24).all(|x| buffer[(x, metadata_top + 1)].fg == theme.dim));
+        // The album sits a step quieter than the artist above it.
+        assert!((2..7).all(|x| buffer[(x, metadata_top + 2)].fg == theme.faint));
     }
 
     #[test]
@@ -230,17 +270,17 @@ mod tests {
 
     #[test]
     fn library_preview_appears_at_the_exact_width_and_height_boundary() {
-        let too_narrow = Rect::new(7, 3, 79, 15);
+        let too_narrow = Rect::new(7, 3, 79, HEIGHT);
         assert_eq!(split_preview(too_narrow, 52), (too_narrow, None));
 
-        let too_short = Rect::new(7, 3, 80, 14);
+        let too_short = Rect::new(7, 3, 80, HEIGHT - 1);
         assert_eq!(split_preview(too_short, 52), (too_short, None));
 
-        let area = Rect::new(7, 3, 80, 15);
+        let area = Rect::new(7, 3, 80, HEIGHT);
         assert_eq!(
             split_preview(area, 52),
             (
-                Rect::new(7, 3, 52, 15),
+                Rect::new(7, 3, 52, HEIGHT),
                 Some(Rect::new(61, 3, WIDTH, HEIGHT)),
             )
         );
@@ -271,15 +311,46 @@ mod tests {
     }
 
     #[test]
-    fn image_area_excludes_the_frame_and_both_metadata_rows() {
+    fn an_album_that_only_repeats_the_title_never_becomes_a_row() {
+        // Padding is not a difference: a duplicate wide enough to overflow
+        // would otherwise scroll a row that is never drawn.
+        assert_eq!(album_row("Song", "Song"), "");
+        assert_eq!(album_row("Song", "  Song  "), "");
+        assert_eq!(album_row(" Song ", "Song"), "");
+        assert_eq!(album_row("Song", "Song (Deluxe)"), "Song (Deluxe)");
+        // Case still distinguishes releases, so it is left alone.
+        assert_eq!(album_row("Song", "SONG"), "SONG");
+
+        let padded_duplicate = crate::api::SongRow {
+            id: 1,
+            title: "Song".into(),
+            album: format!("Song{}", " ".repeat(40)),
+            artist: "A".into(),
+            duration_ms: 1000,
+            pic_url: None,
+            artist_id: None,
+            album_id: None,
+        };
+        assert!(!metadata_needs_marquee(&padded_duplicate));
+    }
+
+    #[test]
+    fn image_area_excludes_the_frame_and_every_metadata_row() {
         assert_eq!(
-            content_areas(Rect::new(2, 1, 22, 13)),
+            content_areas(Rect::new(2, 1, 22, 14)),
             PreviewAreas {
                 image: Rect::new(2, 1, 22, 11),
                 title: Rect::new(2, 12, 22, 1),
                 artist: Rect::new(2, 13, 22, 1),
+                album: Rect::new(2, 14, 22, 1),
             }
         );
+        // A panel too short for all three rows drops them from the bottom up
+        // rather than overlapping the image.
+        let cramped = content_areas(Rect::new(2, 1, 22, 2));
+        assert_eq!(cramped.album.height, 0);
+        assert_eq!(cramped.artist.height, 1);
+        assert_eq!(cramped.title.height, 1);
     }
 
     #[test]

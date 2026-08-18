@@ -25,8 +25,19 @@ use crate::theme::Theme;
 
 /// Wider terminals use a fixed reading measure instead of stretching every view.
 pub(crate) const WIDE_LAYOUT_THRESHOLD: u16 = 120;
-/// The shared large-screen canvas keeps related content within one visual group.
+/// The shared large-screen canvas keeps related content within one visual
+/// group. 110 columns is a reading measure — right for the player, whose
+/// subject is lyrics, and wrong for a song table, which earns the extra
+/// columns as a wider title and album.
 pub(crate) const MAX_CONTENT_WIDTH: u16 = 110;
+pub(crate) const MAX_LIST_CONTENT_WIDTH: u16 = 140;
+
+pub(crate) const fn max_content_width(view: View) -> u16 {
+    match view {
+        View::Library | View::Search | View::Queue => MAX_LIST_CONTENT_WIDTH,
+        View::NowPlaying | View::Login | View::Settings => MAX_CONTENT_WIDTH,
+    }
+}
 /// The navigation bar occupies one terminal row.
 pub(crate) const HEADER_HEIGHT: u16 = 1;
 /// The contextual help bar occupies one terminal row.
@@ -121,14 +132,14 @@ pub(crate) fn filter_title(state: &AppState) -> Line<'static> {
 }
 
 /// Constrain only genuinely wide terminals; 120 columns remains a full-width layout.
-pub(crate) const fn centered_content(area: Rect) -> Rect {
+pub(crate) const fn centered_content_for(area: Rect, max_width: u16) -> Rect {
     if area.width <= WIDE_LAYOUT_THRESHOLD {
         return area;
     }
-    let width = if area.width < MAX_CONTENT_WIDTH {
+    let width = if area.width < max_width {
         area.width
     } else {
-        MAX_CONTENT_WIDTH
+        max_width
     };
     Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
@@ -177,6 +188,25 @@ impl Hits {
     }
 }
 
+/// Rows the bottom player bar takes in a browsing view. Zero on the playing
+/// view, which is the bar's own subject, and zero with nothing playing.
+pub(crate) fn player_bar_rows(state: &AppState, height: u16) -> u16 {
+    if state.now.is_some() && state.view != View::NowPlaying {
+        now_playing::player_bar_height(height)
+    } else {
+        0
+    }
+}
+
+/// Rows left for the body panel. `draw` and the selection-preview prediction
+/// must agree exactly: predicting a preview that is not on screen arms the
+/// marquee for it, and the panel then appears mid-scroll.
+pub(crate) fn body_rows(state: &AppState, height: u16) -> u16 {
+    height.saturating_sub(
+        HEADER_HEIGHT + FOOTER_HEIGHT + PANEL_GAP_Y * 2 + player_bar_rows(state, height),
+    )
+}
+
 pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     hits.tabs.clear();
     hits.search_channels.clear();
@@ -202,16 +232,12 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     if area.height < 8 {
         mini_player::draw(frame, state, area, hits);
     } else {
-        let content = centered_content(area);
+        let content = centered_content_for(area, max_content_width(state.view));
         if state.zen {
             now_playing::draw(frame, state, content, hits);
         } else {
             // Browsing views keep the playing track in reach at the bottom.
-            let player_bar_height = if state.now.is_some() && state.view != View::NowPlaying {
-                now_playing::player_bar_height(area.height)
-            } else {
-                0
-            };
+            let player_bar_height = player_bar_rows(state, area.height);
             let [tabs_area, _, body, _, player_bar_area, hints_area] = Layout::vertical([
                 Constraint::Length(HEADER_HEIGHT),
                 Constraint::Length(PANEL_GAP_Y),
@@ -249,7 +275,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
         let feedback_area = if area.height < 8 {
             Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1)
         } else {
-            let content = centered_content(area);
+            let content = centered_content_for(area, max_content_width(state.view));
             Rect::new(
                 content.x,
                 content.bottom().saturating_sub(1),
@@ -683,9 +709,9 @@ mod tests {
     use ratatui::Terminal;
 
     use super::{
-        centered_content, draw, draw_help, draw_hints, draw_quit_confirm, filter_title,
-        footer_hint_spans, footer_hints, panel_block, text, Hits, FOOTER_HEIGHT, HEADER_HEIGHT,
-        MAX_CONTENT_WIDTH, PANEL_GAP_Y, QUIT_MODAL_HEIGHT, QUIT_MODAL_WIDTH,
+        centered_content_for, draw, draw_help, draw_hints, draw_quit_confirm, filter_title,
+        footer_hint_spans, footer_hints, max_content_width, panel_block, text, Hits, FOOTER_HEIGHT,
+        HEADER_HEIGHT, MAX_CONTENT_WIDTH, PANEL_GAP_Y, QUIT_MODAL_HEIGHT, QUIT_MODAL_WIDTH,
     };
     use crate::action::View;
     use crate::api::{ArtistHit, SearchChannel, SongRow};
@@ -946,11 +972,11 @@ mod tests {
     #[test]
     fn centered_content_changes_only_above_the_wide_threshold() {
         assert_eq!(
-            centered_content(Rect::new(7, 3, 120, 40)),
+            centered_content_for(Rect::new(7, 3, 120, 40), MAX_CONTENT_WIDTH),
             Rect::new(7, 3, 120, 40)
         );
         assert_eq!(
-            centered_content(Rect::new(7, 3, 121, 40)),
+            centered_content_for(Rect::new(7, 3, 121, 40), MAX_CONTENT_WIDTH),
             Rect::new(12, 3, MAX_CONTENT_WIDTH, 40)
         );
     }
@@ -984,11 +1010,12 @@ mod tests {
 
     #[test]
     fn global_shell_snapshots_cover_compact_standard_and_wide_terminals() {
-        for (width, height, expected) in [
-            (80, 24, Rect::new(0, 0, 80, 24)),
-            (120, 40, Rect::new(0, 0, 120, 40)),
-            (200, 60, Rect::new(45, 0, MAX_CONTENT_WIDTH, 60)),
-        ] {
+        // Queue is a list view, so its shell uses the wider table measure.
+        for (width, height) in [(80, 24), (120, 40), (200, 60)] {
+            let expected = centered_content_for(
+                Rect::new(0, 0, width, height),
+                max_content_width(View::Queue),
+            );
             let backend = TestBackend::new(width, height);
             let mut terminal = Terminal::new(backend).unwrap();
             let mut state = AppState::new(&Config::default());
@@ -1000,7 +1027,6 @@ mod tests {
                 .unwrap();
             let buffer = terminal.backend().buffer();
 
-            assert_eq!(centered_content(Rect::new(0, 0, width, height)), expected);
             assert_eq!(hits.tabs.len(), 5, "{width}x{height}");
             for (tab, _) in &hits.tabs {
                 assert!(tab.x >= expected.x, "{width}x{height}: {tab:?}");
@@ -1090,11 +1116,7 @@ mod tests {
 
     #[test]
     fn three_size_skeleton_matrix_covers_every_product_view() {
-        const SIZES: [(u16, u16, Rect); 3] = [
-            (80, 24, Rect::new(0, 0, 80, 24)),
-            (120, 40, Rect::new(0, 0, 120, 40)),
-            (200, 60, Rect::new(45, 0, MAX_CONTENT_WIDTH, 60)),
-        ];
+        const SIZES: [(u16, u16); 3] = [(80, 24), (120, 40), (200, 60)];
         const VIEWS: [View; 6] = [
             View::Library,
             View::Search,
@@ -1104,8 +1126,10 @@ mod tests {
             View::NowPlaying,
         ];
 
-        for (width, height, expected_shell) in SIZES {
+        for (width, height) in SIZES {
             for view in VIEWS {
+                let expected_shell =
+                    centered_content_for(Rect::new(0, 0, width, height), max_content_width(view));
                 let backend = TestBackend::new(width, height);
                 let mut terminal = Terminal::new(backend).unwrap();
                 let mut state = matrix_state(view);
@@ -1116,7 +1140,7 @@ mod tests {
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 let frame_area = Rect::new(0, 0, width, height);
-                let shell = centered_content(frame_area);
+                let shell = centered_content_for(frame_area, max_content_width(view));
                 let body = shell_body(shell);
                 let context = format!("{width}x{height} {view:?}");
 
@@ -1193,7 +1217,7 @@ mod tests {
             .draw(|frame| draw(frame, &mut state, &mut hits))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let content = centered_content(Rect::new(0, 0, 200, 60));
+        let content = centered_content_for(Rect::new(0, 0, 200, 60), MAX_CONTENT_WIDTH);
 
         assert!(hits.tabs.is_empty());
         for y in 0..60 {

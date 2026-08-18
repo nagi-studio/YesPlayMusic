@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::app::AppState;
 use crate::i18n::{self, Key};
-use crate::ui::text::{needs_marquee, pad_or_marquee};
+use crate::ui::text::{needs_marquee, pad_display, pad_or_marquee};
 use crate::ui::Hits;
 
 /// The now-playing marker occupies one terminal cell.
@@ -100,7 +100,8 @@ pub fn draw(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
 
 pub(crate) fn marquee_needed(row: &crate::api::SongRow, area_width: u16) -> bool {
     let columns = QueueColumns::for_width(super::panel_inner_width(area_width));
-    needs_marquee(&row.title, columns.title) || needs_marquee(&row.artist, ARTIST_WIDTH)
+    // Same rule as the library and search lists: only the title scrolls.
+    needs_marquee(&row.title, columns.title)
 }
 
 #[derive(Clone, Copy)]
@@ -200,10 +201,7 @@ impl QueueColumns {
                 title_style,
             ),
             Span::styled(" ", base),
-            Span::styled(
-                pad_or_marquee(&row.artist, ARTIST_WIDTH, selected, marquee_frame),
-                base.fg(theme.dim),
-            ),
+            Span::styled(pad_display(&row.artist, ARTIST_WIDTH), base.fg(theme.dim)),
             Span::styled(" ", base),
             Span::styled(
                 format!("{:>DURATION_WIDTH$}", super::format_ms(row.duration_ms)),

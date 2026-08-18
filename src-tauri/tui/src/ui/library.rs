@@ -87,8 +87,10 @@ pub(crate) fn marquee_needed(
         (content, None)
     };
     let columns = SongColumns::for_width(super::panel_inner_width(list.width));
+    // Only the title scrolls in a row: it is what identifies the track, and
+    // two runs sliding off one frame counter read as the whole row moving.
+    // The artist and album columns truncate, as the album already did.
     needs_marquee(&row.title, columns.title)
-        || needs_marquee(&row.artist, columns.artist)
         || preview.is_some() && cover_preview::metadata_needs_marquee(row)
 }
 
@@ -309,10 +311,7 @@ impl SongColumns {
                 title_style,
             ),
             Span::styled(" ", base),
-            Span::styled(
-                pad_or_marquee(&row.artist, self.artist, selected, marquee_frame),
-                base.fg(theme.dim),
-            ),
+            Span::styled(pad_display(&row.artist, self.artist), base.fg(theme.dim)),
         ];
         if let Some(album_width) = self.album {
             spans.push(Span::styled(" ", base));
@@ -439,6 +438,29 @@ mod tests {
     }
 
     #[test]
+    fn a_long_artist_truncates_instead_of_scrolling_the_row() {
+        let row = crate::api::SongRow {
+            id: 1,
+            title: "Short".into(),
+            artist: "A deliberately long artist credit that cannot fit".into(),
+            album: String::new(),
+            duration_ms: 1000,
+            pic_url: None,
+            artist_id: None,
+            album_id: None,
+        };
+        // Only the title earns the marquee, so an over-long artist alone must
+        // not arm it — otherwise the whole selected row slides for a
+        // secondary field the album column already truncates.
+        assert!(!marquee_needed(&row, 200, false));
+        let with_long_title = crate::api::SongRow {
+            title: "A deliberately long track title that cannot fit either".into(),
+            ..row
+        };
+        assert!(marquee_needed(&with_long_title, 60, false));
+    }
+
+    #[test]
     fn wide_library_adds_album_and_keeps_cover_beside_the_list() {
         let (buffer, hits, state) = rendered_library(120, 40);
 
@@ -448,11 +470,14 @@ mod tests {
             .iter()
             .all(|(area, _)| area.x == 22 && area.width == 68));
         assert_eq!(buffer[(91, 0)].symbol(), "╮");
+        // Anchored to the preview's own height so adding a metadata row
+        // moves the assertion with the panel instead of breaking it.
+        let preview_bottom = super::cover_preview::HEIGHT - 1;
         for (position, symbol) in [
             ((94, 0), "╭"),
             ((119, 0), "╮"),
-            ((94, 14), "╰"),
-            ((119, 14), "╯"),
+            ((94, preview_bottom), "╰"),
+            ((119, preview_bottom), "╯"),
             ((96, 1), "▀"),
         ] {
             assert_eq!(buffer[position].symbol(), symbol);
@@ -483,11 +508,12 @@ mod tests {
             .iter()
             .all(|(row, _)| row.x == 67 && row.width == 58));
         assert_eq!(buffer[(126, 2)].symbol(), "╮");
+        let preview_bottom = 2 + super::cover_preview::HEIGHT - 1;
         for (position, symbol) in [
             ((129, 2), "╭"),
             ((154, 2), "╮"),
-            ((129, 16), "╰"),
-            ((154, 16), "╯"),
+            ((129, preview_bottom), "╰"),
+            ((154, preview_bottom), "╯"),
             ((131, 3), "▀"),
         ] {
             assert_eq!(buffer[position].symbol(), symbol);

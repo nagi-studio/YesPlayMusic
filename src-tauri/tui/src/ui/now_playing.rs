@@ -37,7 +37,12 @@ const SIDE_PANEL_MIN_SPECTRUM_ROWS: u16 = 4;
 /// below and above), the spectrum absorbs the rest down to the cover's
 /// bottom edge. Tall terminals get more context lines AND a taller band.
 const SIDE_PANEL_MIN_LYRIC_ROWS: u16 = 3;
-const SIDE_PANEL_MAX_LYRIC_ROWS: u16 = 12;
+const SIDE_PANEL_MAX_LYRIC_ROWS: u16 = 20;
+/// The stacked layout caps its band at 8 rows; the side panel needs a cap of
+/// its own or a tall terminal hands it twenty-odd rows. Bars are drawn from
+/// the bottom, so the surplus reads as a hole between the lyrics and the
+/// spectrum rather than as a taller visualisation.
+const SIDE_PANEL_MAX_SPECTRUM_ROWS: u16 = 12;
 
 /// The bottom spectrum band only exists in the stacked layout; the side
 /// layout hosts the spectrum inside the right panel, bottom-aligned with
@@ -91,7 +96,7 @@ fn side_panel_spectrum_rows(state: &AppState, panel_height: u16) -> u16 {
     if rest < SIDE_PANEL_MIN_SPECTRUM_ROWS {
         0
     } else {
-        rest
+        rest.min(SIDE_PANEL_MAX_SPECTRUM_ROWS)
     }
 }
 

@@ -164,6 +164,34 @@ fn a_centred_meta_line_puts_its_link_under_the_visible_text() {
 }
 
 #[test]
+fn the_preview_prediction_accounts_for_the_bottom_player_bar() {
+    let mut state = AppState::new(&Config::default());
+    state.view = View::Library;
+    state.terminal_size = (110, 22);
+    // Nothing playing: no bar, so the body clears the preview's height.
+    assert!(state.selection_preview_visible());
+
+    state.now = Some(NowPlaying {
+        title: "T".into(),
+        artist: "A".into(),
+        album: "B".into(),
+        artist_id: None,
+        album_id: None,
+    });
+    // The bar now eats the rows the preview needed. Predicting otherwise arms
+    // the marquee for a panel that is not on screen, and it then appears
+    // already scrolled.
+    assert_eq!(
+        state.selection_preview_visible(),
+        crate::ui::body_rows(&state, 22) >= crate::ui::cover_preview::HEIGHT
+    );
+    assert!(
+        crate::ui::body_rows(&state, 22)
+            < crate::ui::body_rows(&AppState::new(&Config::default()), 22)
+    );
+}
+
+#[test]
 fn a_playing_track_keeps_the_ui_tick_armed_on_its_own() {
     let mut state = AppState::new(&Config::default());
     // Idle: nothing moves by itself, so the loop is free to sleep.

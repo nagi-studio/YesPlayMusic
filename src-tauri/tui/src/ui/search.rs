@@ -84,8 +84,8 @@ pub(crate) fn marquee_needed(row: &SongRow, area_width: u16, preview_visible: bo
         (area, None)
     };
     let columns = SearchColumns::for_width(super::panel_inner_width(panel.width));
+    // Matches the library list: the title scrolls, the artist truncates.
     needs_marquee(&row.title, columns.title)
-        || needs_marquee(&row.artist, ARTIST_WIDTH)
         || preview.is_some() && cover_preview::metadata_needs_marquee(row)
 }
 
@@ -590,10 +590,7 @@ impl SearchColumns {
                 title_style,
             ),
             Span::styled(" ", base),
-            Span::styled(
-                pad_or_marquee(&row.artist, ARTIST_WIDTH, selected, marquee_frame),
-                base.fg(theme.dim),
-            ),
+            Span::styled(pad_display(&row.artist, ARTIST_WIDTH), base.fg(theme.dim)),
             Span::styled(" ", base),
             Span::styled(
                 format!("{:>DURATION_WIDTH$}", super::format_ms(row.duration_ms)),
@@ -786,7 +783,7 @@ mod tests {
         for (width, height, shell_x, panel_right, row) in [
             (80, 24, 0, 79, Rect::new(2, 7, 76, 1)),
             (120, 40, 0, 91, Rect::new(2, 7, 88, 1)),
-            (200, 60, 45, 126, Rect::new(47, 7, 78, 1)),
+            (200, 60, 30, 141, Rect::new(32, 7, 108, 1)),
         ] {
             let (buffer, hits, state) = rendered_search_shell(width, height);
             let context = format!("{width}x{height}");
@@ -815,7 +812,7 @@ mod tests {
         for (width, height, shell_x, panel_right, row) in [
             (80, 24, 0, 79, Rect::new(2, 4, 76, 1)),
             (120, 40, 0, 91, Rect::new(2, 4, 88, 1)),
-            (200, 60, 45, 126, Rect::new(47, 4, 78, 1)),
+            (200, 60, 30, 141, Rect::new(32, 4, 108, 1)),
         ] {
             let (buffer, hits, state) = rendered_detail_shell(width, height);
             let context = format!("{width}x{height}");
