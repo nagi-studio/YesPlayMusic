@@ -61,6 +61,16 @@ Tauri updater 的 Minisign 密钥是另一套完整性门禁，不能因为不�
 `release.published`，所以发布后才修 tag 会让 canary feed 永远不推进——
 `publish-canary-updater-feed.yaml` 留了 `workflow_dispatch`（输入 tag）作为补救。
 
+**发布后必须同步 Homebrew tap**，否则 brew 用户升不上来。改
+[`nagi-studio/homebrew-ypm`](https://github.com/nagi-studio/homebrew-ypm) 的
+`Formula/ypm.rb`：`version`、两条下载 URL 里的 tag，以及 `ypm-macos-aarch64` 和
+`ypm-linux-x64` 两个 `sha256`（`shasum -a 256 <产物>`）。本仓库 `Formula/ypm.rb`
+是模板，永远保持 `0.0.0` 占位，不要在这里填真版本号。
+
+`ypm update` 判断 brew 用户该不该升级时读的是 tap 里的 formula 版本，不是 GitHub
+Release 的 tag——tap 没同步就等于没发版，用户不会收到误报的升级提示，但也永远升不上来。
+v0.9.0 就漏过一次：GitHub 标了 latest，tap 还停在 0.8.0。
+
 **发布前必须手写 release 正文**，不能只留自动生成的 Full Changelog 链接。
 仓库没有 CHANGELOG 文件，变更记录只存在于 release 正文里。格式照 v0.6.2 / v0.6.3：
 一段 `## 修复`，用户视角的中文条目（说"能拖动窗口了"，不说"补了 drag-region 属性"），
