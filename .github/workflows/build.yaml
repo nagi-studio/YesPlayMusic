@@ -17,6 +17,7 @@ jobs:
   changes:
     name: Classify changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -46,6 +47,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs-only == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -73,6 +75,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs-only != 'true' && needs.changes.outputs.tui-only != 'true'
     runs-on: macos-latest
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -266,6 +269,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs-only != 'true' && needs.changes.outputs.tui-only != 'true'
     runs-on: windows-latest
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -424,6 +428,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs-only != 'true' && needs.changes.outputs.tui-only != 'true'
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -611,6 +616,7 @@ jobs:
             source: ypm.exe
             dest: ypm-windows-x64.exe
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -711,6 +717,7 @@ jobs:
       - build-tauri-linux-x64
       - build-ypm
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
 
