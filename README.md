@@ -68,6 +68,7 @@ formula 模板在 [`Formula/`](Formula/)，发版后同步到 [`nagi-studio/home
 
 ```bash
 chmod +x ypm-macos-aarch64 # Linux 对应 ypm-linux-x64
+xattr -d com.apple.quarantine ypm-macos-aarch64 # 仅浏览器下载需要
 ./ypm-macos-aarch64
 ```
 
@@ -145,7 +146,9 @@ mkdir -p ~/.agents/skills/ypm && curl -fsSL \
 到 [Releases](https://github.com/nagi-studio/YesPlayMusic/releases) 下载 DMG，
 只提供 Apple Silicon（`arm64`），要求 macOS 14 或更高版本。
 
-DMG 未签名也没有公证（上游公开版同样如此），首次打开时 macOS 会拦一道，放行方法二选一：
+DMG 经 Developer ID 签名与 Apple 公证，下载后双击即可，不需要额外放行。
+
+v0.9.1 及更早的包没有签名，首次打开时 macOS 会拦一道，放行方法二选一：
 
 - 打开「系统设置 → 隐私与安全性」，往下翻到被拦截的提示，点「仍要打开」
 - 或者在终端跑一句：`xattr -dr com.apple.quarantine /Applications/YesPlayMusic.app`
@@ -157,9 +160,10 @@ DMG 未签名也没有公证（上游公开版同样如此），首次打开时 
 
 <br>
 
-DMG 内的 `.app` 带完整的 ad-hoc Hardened Runtime seal；DMG 本身未签名，也没有 Developer ID
-身份签名或 Apple 公证。版本 tag 走这套无 Developer ID 的发布流程，这就是当前正式发布政策。
-仓库保留 `APPLE_SIGNING_ENABLED=true` 的可选 CI 能力，但默认不启用。
+DMG 内的 `.app` 由 `Developer ID Application` 身份签名、启用 Hardened Runtime，并经 Apple
+公证，DMG 带 stapler ticket，因此离线也能通过 Gatekeeper 校验。签名与公证是发版门禁：
+`codesign --verify`、`spctl --assess` 和 `xcrun stapler validate` 任一失败就不产出安装包。
+v0.9.1 及更早的版本走的是 ad-hoc Hardened Runtime seal，没有 Developer ID 身份。
 
 从 tag 构建的包会在启动时静默检查更新，也可以在设置页手动检查、下载和安装。stable 只接收
 stable 更新，canary 只接收 canary 更新；更新包使用 Tauri Minisign 验签，与 Apple Developer ID

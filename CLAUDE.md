@@ -42,7 +42,7 @@ CI（`.github/workflows/build.yaml`）只验证每次 push 的**最后一个 com
 里的四个 workspace package 跟着更新）。
 `bun run verify:tauri:version` 会校验所有位置与 tag 一致，CI 里也会跑。
 
-推 `v*` tag 触发 `.github/workflows/build.yaml`：三平台构建（配置 Apple 签名时包含公证）→
+推 `v*` tag 触发 `.github/workflows/build.yaml`：三平台构建（macOS 含 Developer ID 签名与公证）→
 建**草稿** release。正式版草稿用 `gh release edit vX.Y.Z --draft=false --latest` 发布；
 canary 等预发布版本必须用
 `gh release edit vX.Y.Z-canary.N --draft=false --prerelease --latest=false`，不能设为 latest。
@@ -50,9 +50,24 @@ canary 发布后的 `release.published` 会触发 `.github/workflows/publish-can
 它只在最终 artifact 与 `TAURI_UPDATER_PUBKEY` 验签通过后推进独立 canary feed；不要手工改
 `updater-feed` 分支，也不要让草稿提前进入 feed。stable 继续使用 GitHub latest，不会收到 canary。
 
-当前 macOS 发布政策固定使用 adhoc Hardened Runtime DMG，`APPLE_SIGNING_ENABLED` 保持非
-`true`；Developer ID 与公证不是验收门禁。CI 中的 Apple 签名分支只保留为未来可选能力。
-Tauri updater 的 Minisign 密钥是另一套完整性门禁，不能因为不做 Developer ID 而关闭。
+macOS 正式发布走 Developer ID 签名 + Apple 公证：仓库变量 `APPLE_SIGNING_ENABLED=true`
+（2026-08-20 启用，v0.9.1 及更早的包仍是 adhoc）。tag 构建会把 `APPLE_CERTIFICATE`
+导进临时钥匙串出签名 DMG，`codesign --verify`、`spctl --assess` 和 `xcrun stapler validate`
+三项都是硬门禁，任一失败就不出包。签名身份是
+`Developer ID Application: Zexi Zhang (PJM828YBFJ)`。
+
+七个 secret 缺一个就卡在 "Verify Apple release secrets"：`APPLE_CERTIFICATE`（p12 的
+base64，**只含 Developer ID 这一张**，login 钥匙串里另外两张身份不要一起导）、
+`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、
+`APPLE_TEAM_ID`、`KEYCHAIN_PASSWORD`。`APPLE_PASSWORD` 是 appleid.apple.com 生成的
+**App 专用密码**，不是账号登录密码；换密码前用
+`xcrun notarytool store-credentials <名字> --apple-id <邮箱> --team-id PJM828YBFJ`
+本地验一次，它会当场向 Apple 校验，比打 tag 等 CI 失败快得多。
+
+**证书 2027-02-01 到期。** 签名带安全时间戳，到期前签出的包之后依然有效，但之后要发新版本
+必须先续证书、重新导出 `APPLE_CERTIFICATE` 和 `APPLE_CERTIFICATE_PASSWORD`。
+
+Tauri updater 的 Minisign 密钥是另一套完整性门禁，和 Developer ID 互不替代，两套都不能关。
 
 `draft-release` 汇总产物时会用 updater 私钥给三个 `ypm-*` 二进制出 `.sig`，
 `ypm update` 靠它验签；`generate-updater-manifest.mjs` 按 `ypm-` 前缀跳过这些文件。
