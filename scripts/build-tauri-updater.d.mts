@@ -12,6 +12,11 @@ export function createUpdaterBuildConfig(
   version?: string
 ): Promise<Record<string, unknown>>;
 
+export function updaterBuildArgs(
+  target: string,
+  options?: { developerId?: boolean }
+): string[];
+
 export function buildTauriUpdater(
   target: string,
   options?: { developerId?: boolean }

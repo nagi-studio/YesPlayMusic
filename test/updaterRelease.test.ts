@@ -17,6 +17,7 @@ import { verifyUpdaterReleaseEnvironment } from '../scripts/verify-updater-relea
 import {
   CANARY_UPDATER_ENDPOINT,
   createUpdaterBuildConfig,
+  updaterBuildArgs,
 } from '../scripts/build-tauri-updater.mjs';
 import { resolveTauriSmokeExecutable } from '../scripts/smoke-tauri-local.mjs';
 import { verifyCanaryUpdaterFeedAdvance } from '../scripts/verify-updater-feed-advance.mjs';
@@ -614,4 +615,24 @@ test('installed smoke canonicalizes symlinked launch paths before Tauri resolves
     }
     await rm(realRoot, { recursive: true, force: true });
   }
+});
+
+test('Developer ID 构建保留 app 目标，否则 macOS 更新包和 .app 都不会产出', () => {
+  // v0.9.2 的首个签名构建就挂在这：--bundles dmg 让 Tauri 在打完 DMG 后删掉
+  // bundle/macos/YesPlayMusic.app，签名验收、collect:tauri:release-dmg 和
+  // updater 产物三处同时失效，而 Tauri 只在日志里留一行 warn。
+  const developerId = updaterBuildArgs('darwin-aarch64', { developerId: true });
+  expect(developerId).toContain('app,dmg');
+  expect(developerId).not.toContain('dmg');
+
+  // 未签名路径沿用 plan 里的默认目标，不覆盖 bundles。
+  expect(updaterBuildArgs('darwin-aarch64')).toEqual([]);
+
+  // --developer-id 只对 macOS 有意义，其它平台不受影响。
+  expect(updaterBuildArgs('windows-x86_64', { developerId: true })).toEqual([
+    '--bundles',
+    'nsis',
+    '--ci',
+  ]);
+  expect(() => updaterBuildArgs('darwin-x86_64')).toThrow();
 });

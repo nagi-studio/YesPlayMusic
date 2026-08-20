@@ -73,6 +73,24 @@ export async function createUpdaterBuildConfig(publicKey, version) {
   };
 }
 
+/// Bundle targets for a build. The Developer ID path is the only one that
+/// overrides its plan, because it has to produce the DMG that ships.
+///
+/// `app` must stay in that list even though only the DMG is published. Drop
+/// it and Tauri deletes bundle/macos/YesPlayMusic.app the moment the DMG is
+/// built, which breaks three consumers at once: the signature/staple
+/// validation gate, collect:tauri:release-dmg (it re-verifies the .app and
+/// reads its provenance), and the updater artifacts — those come only from an
+/// updater-enabled target, so a dmg-only build silently ships no macOS
+/// auto-update at all. v0.9.2's first signed build failed on exactly this.
+export function updaterBuildArgs(target, { developerId = false } = {}) {
+  const plan = UPDATER_BUILD_PLANS[target];
+  if (!plan) throw new Error(`Unsupported updater target: ${target}`);
+  return target === 'darwin-aarch64' && developerId
+    ? ['--bundles', 'app,dmg', '--ci']
+    : plan.args;
+}
+
 function run(args) {
   const result = Bun.spawnSync([process.execPath, ...args], {
     cwd: projectRoot,
@@ -100,10 +118,7 @@ export async function buildTauriUpdater(target, { developerId = false } = {}) {
       process.env.TAURI_UPDATER_PUBKEY
     );
     await writeFile(configPath, JSON.stringify(config), 'utf8');
-    const buildArgs =
-      target === 'darwin-aarch64' && developerId
-        ? ['--bundles', 'dmg', '--ci']
-        : plan.args;
+    const buildArgs = updaterBuildArgs(target, { developerId });
     run([
       'tauri',
       'build',
