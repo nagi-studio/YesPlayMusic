@@ -97,8 +97,13 @@ Nerd Font 图标在设置页把「图标」切到 `nerd`：
 quality = "exhigh"       # 128 | 192 | 320/exhigh | lossless | hires
 cover_mode = "original"  # 终端不支持原图协议时自动回退到 pixel
 pixel_scale = 1.0        # pixel 模式采样细节；不会放大封面占用区域
+cover_size = "auto"      # compact | auto | large，封面占用区域大小
+intro_animation = true   # 启动时播放像素 logo 动画，任意键跳过
 # cache_limit_mib = 8192 # 仅显式设置时更新 ypm 进程共享的缓存上限
 ```
+
+配置文件里出现无法识别的字段、非法的值或语法错误时，ypm 会直接报错退出并指出问题所在，
+不会带着默认值启动——否则下一次在设置页保存就会把你原来的配置覆盖掉。
 
 不设置 `cache_limit_mib` 时沿用缓存数据库现有值，新数据库默认 8 GiB。
 

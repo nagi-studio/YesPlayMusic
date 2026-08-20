@@ -50,11 +50,17 @@ canary 发布后的 `release.published` 会触发 `.github/workflows/publish-can
 它只在最终 artifact 与 `TAURI_UPDATER_PUBKEY` 验签通过后推进独立 canary feed；不要手工改
 `updater-feed` 分支，也不要让草稿提前进入 feed。stable 继续使用 GitHub latest，不会收到 canary。
 
-macOS 正式发布走 Developer ID 签名 + Apple 公证：仓库变量 `APPLE_SIGNING_ENABLED=true`
-（2026-08-20 启用，v0.9.1 及更早的包仍是 adhoc）。tag 构建会把 `APPLE_CERTIFICATE`
-导进临时钥匙串出签名 DMG，`codesign --verify`、`spctl --assess` 和 `xcrun stapler validate`
-三项都是硬门禁，任一失败就不出包。签名身份是
-`Developer ID Application: Zexi Zhang (PJM828YBFJ)`。
+macOS 正式发布走 Developer ID 签名 + Apple 公证，**没有开关**：tag 构建一律把
+`APPLE_CERTIFICATE` 导进临时钥匙串出签名 DMG，`codesign --verify`、`spctl --assess`
+和 `xcrun stapler validate` 三项都是硬门禁，任一失败就不出包。签名身份是
+`Developer ID Application: Zexi Zhang (PJM828YBFJ)`。v0.9.1 及更早的包仍是 adhoc。
+
+曾经有过一个 `APPLE_SIGNING_ENABLED` 变量，v0.9.3 删掉了：它的 `!= 'true'` 分支会在
+变量缺失或拼错时静默退回 adhoc 出包，而下游没有任何一步检查这件事——配置漂移会安静地
+发出一个没签名的正式版。**不要再引入这种"签名可选"的旁路。**
+
+DMG 要单独送公证并 staple。Tauri 只公证 `.app`，而 quarantine 是打在 DMG 上的、
+macOS 第一次打开时评估的也是磁盘映像本身，所以少了这步的包在用户那里照样被拦。
 
 七个 secret 缺一个就卡在 "Verify Apple release secrets"：`APPLE_CERTIFICATE`（p12 的
 base64，**只含 Developer ID 这一张**，login 钥匙串里另外两张身份不要一起导）、
