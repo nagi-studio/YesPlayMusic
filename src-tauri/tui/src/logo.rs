@@ -9,6 +9,7 @@
 use std::io::Write;
 use std::time::Duration;
 
+use crossterm::event::{Event, KeyEventKind};
 use ratatui::style::Color;
 
 use crate::pixel::{self, CoverDetail, CoverPalette, PixelCover};
@@ -29,6 +30,7 @@ const STEP: Duration = Duration::from_millis(55);
 const SETTLE: Duration = Duration::from_millis(140);
 const FLASH: Duration = Duration::from_millis(80);
 const SIGN_OFF: Duration = Duration::from_millis(320);
+const INPUT_POLL: Duration = Duration::from_millis(16);
 
 /// How far the leading row and the flash pull the artwork toward white.
 const LIT: u16 = 150;
@@ -83,52 +85,150 @@ pub(crate) fn wordmark(style: Style, version: &str) -> String {
     )
 }
 
-/// Plays the intro, polling `skip` between frames so a keypress can cut it
-/// short. Returns `false` when the terminal cannot carry the animation, so
-/// the caller can fall back to [`wordmark`].
-pub(crate) async fn play(style: Style, version: &str, mut skip: impl FnMut() -> bool) -> bool {
+/// Plays the intro and polls terminal input between frames so any key can cut
+/// it short. Returns `false` when the terminal cannot carry the animation.
+pub(crate) async fn play_interactive(style: Style, version: &str) -> std::io::Result<bool> {
     if !can_animate(style) {
-        return false;
+        return Ok(false);
     }
     let Some(cover) = cover() else {
-        return false;
+        return Ok(false);
     };
-    print!("{HIDE_CURSOR}{CLEAR_SCREEN}");
-    let _ = std::io::stdout().flush();
+    let _raw_mode = RawModeGuard::enter()?;
+    let mut terminal = IntroTerminal::enter()?;
 
     // The mark grows out of its centre line in both directions; the lit
     // leading row is the edge still arriving, the rows behind it have settled.
     let mut cut_short = false;
     for radius in 0..=(ROWS / 2) {
-        if skip() {
+        if poll_keypress()? {
             cut_short = true;
             break;
         }
         draw(style, &cover, radius as i32 - 1, radius as i32, false, None);
-        tokio::time::sleep(STEP).await;
+        if wait_for_input(STEP).await? {
+            cut_short = true;
+            break;
+        }
     }
 
     let full = ROWS as i32;
     draw(style, &cover, full, -1, false, None);
-    if !cut_short && !skip() {
-        tokio::time::sleep(SETTLE).await;
-        for flash in [true, false, true] {
-            draw(style, &cover, full, -1, flash, None);
-            tokio::time::sleep(FLASH).await;
-            if skip() {
-                cut_short = true;
-                break;
+    if !cut_short && !poll_keypress()? {
+        if wait_for_input(SETTLE).await? {
+            cut_short = true;
+        } else {
+            for flash in [true, false, true] {
+                draw(style, &cover, full, -1, flash, None);
+                if wait_for_input(FLASH).await? {
+                    cut_short = true;
+                    break;
+                }
             }
         }
     }
 
     draw(style, &cover, full, -1, false, Some(version));
-    if !cut_short && !skip() {
-        tokio::time::sleep(SIGN_OFF).await;
+    if !cut_short && !poll_keypress()? {
+        let _ = wait_for_input(SIGN_OFF).await?;
     }
-    print!("{SHOW_CURSOR}");
-    let _ = std::io::stdout().flush();
-    true
+    terminal.restore()?;
+    Ok(true)
+}
+
+fn poll_keypress() -> std::io::Result<bool> {
+    while crossterm::event::poll(Duration::ZERO)? {
+        match intro_input(crossterm::event::read()?) {
+            Some(IntroInput::Skip) => return Ok(true),
+            Some(IntroInput::Interrupt) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "intro interrupted",
+                ));
+            }
+            None => {}
+        }
+    }
+    Ok(false)
+}
+
+async fn wait_for_input(duration: Duration) -> std::io::Result<bool> {
+    let deadline = tokio::time::Instant::now() + duration;
+    loop {
+        if poll_keypress()? {
+            return Ok(true);
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep((deadline - now).min(INPUT_POLL)).await;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntroInput {
+    Skip,
+    Interrupt,
+}
+
+fn intro_input(event: Event) -> Option<IntroInput> {
+    let Event::Key(key) = event else { return None };
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    if key.code == crossterm::event::KeyCode::Char('c')
+        && key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+    {
+        Some(IntroInput::Interrupt)
+    } else {
+        Some(IntroInput::Skip)
+    }
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enter() -> std::io::Result<Self> {
+        crossterm::terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+struct IntroTerminal {
+    active: bool,
+}
+
+impl IntroTerminal {
+    fn enter() -> std::io::Result<Self> {
+        let terminal = Self { active: true };
+        print!("{HIDE_CURSOR}{CLEAR_SCREEN}");
+        std::io::stdout().flush()?;
+        Ok(terminal)
+    }
+
+    fn restore(&mut self) -> std::io::Result<()> {
+        if self.active {
+            print!("{SHOW_CURSOR}");
+            std::io::stdout().flush()?;
+            self.active = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for IntroTerminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
 }
 
 fn draw(
@@ -270,5 +370,24 @@ mod tests {
         assert_eq!(brighten(255, 255, 255), (255, 255, 255));
         let (red, ..) = brighten(0, 0, 0);
         assert_eq!(red, LIT as u8);
+    }
+
+    #[test]
+    fn regular_keys_skip_ctrl_c_interrupts_and_non_keys_do_nothing() {
+        assert_eq!(
+            intro_input(Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('x'),
+                crossterm::event::KeyModifiers::NONE,
+            ))),
+            Some(IntroInput::Skip)
+        );
+        assert_eq!(
+            intro_input(Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ))),
+            Some(IntroInput::Interrupt)
+        );
+        assert_eq!(intro_input(Event::Resize(80, 24)), None);
     }
 }

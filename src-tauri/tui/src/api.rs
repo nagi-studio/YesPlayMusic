@@ -19,35 +19,51 @@ use yesplaymusic_core::ncm::{
 use yesplaymusic_core::unm::UnmState;
 
 pub use yesplaymusic_core::ncm::{
-    AlbumHit, ArtistHit, LyricsPayload, PlaylistHit, QrStatus, SearchChannel, SearchPage, SongRow,
+    AlbumHit, ArtistHit, LyricsPayload, PlaylistHit, QrStatus, SearchPage, SongRow,
 };
 
-use yesplaymusic_core::ncm::{SearchPayload as CoreSearchPayload, SongItem};
+use yesplaymusic_core::ncm::{
+    SearchChannel as CoreSearchChannel, SearchPayload as CoreSearchPayload, SongItem,
+};
 
-/// Tab order for the TUI's search view; the MV/user channels core also
-/// models have no TUI tab.
-pub trait SearchChannelTabs: Sized + Copy + PartialEq {
-    const TABS: [SearchChannel; 4];
-    fn index(self) -> usize;
-    fn cycle(self, delta: i32) -> Self;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SearchChannel {
+    #[default]
+    Songs,
+    Artists,
+    Albums,
+    Playlists,
 }
 
-impl SearchChannelTabs for SearchChannel {
-    const TABS: [SearchChannel; 4] = [
+impl SearchChannel {
+    pub const TABS: [Self; 4] = [
         SearchChannel::Songs,
         SearchChannel::Artists,
         SearchChannel::Albums,
         SearchChannel::Playlists,
     ];
 
-    fn index(self) -> usize {
-        Self::TABS.iter().position(|tab| *tab == self).unwrap_or(0)
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Songs => 0,
+            Self::Artists => 1,
+            Self::Albums => 2,
+            Self::Playlists => 3,
+        }
     }
 
-    fn cycle(self, delta: i32) -> Self {
-        let index = (SearchChannelTabs::index(self) as i32 + delta)
-            .rem_euclid(Self::TABS.len() as i32) as usize;
+    pub fn cycle(self, delta: i32) -> Self {
+        let index = (self.index() as i32 + delta).rem_euclid(Self::TABS.len() as i32) as usize;
         Self::TABS[index]
+    }
+
+    const fn core(self) -> CoreSearchChannel {
+        match self {
+            Self::Songs => CoreSearchChannel::Songs,
+            Self::Artists => CoreSearchChannel::Artists,
+            Self::Albums => CoreSearchChannel::Albums,
+            Self::Playlists => CoreSearchChannel::Playlists,
+        }
     }
 }
 
@@ -101,9 +117,7 @@ fn build_http_client(connect: Duration, total: Duration) -> reqwest::Client {
         .connect_timeout(connect)
         .timeout(total)
         .build()
-        // Builder failure means no TLS backend at all; an unbounded default
-        // client still beats refusing to show any cover.
-        .unwrap_or_default()
+        .expect("bounded HTTP client must initialize")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -441,10 +455,11 @@ impl Ncm {
         keywords: &str,
         channel: SearchChannel,
         limit: u32,
+        offset: u32,
     ) -> Result<SearchPayload> {
         let payload = self
             .core
-            .search_channel(keywords, channel, limit, 0)
+            .search_channel(keywords, channel.core(), limit, offset)
             .await
             .map_err(|error| match error {
                 NcmClientError::Api(error) => anyhow!(i18n::t_api_failed(Key::OpSearch, error)),
@@ -458,9 +473,8 @@ impl Ncm {
             CoreSearchPayload::Artists(page) => SearchPayload::Artists(page),
             CoreSearchPayload::Albums(page) => SearchPayload::Albums(page),
             CoreSearchPayload::Playlists(page) => SearchPayload::Playlists(page),
-            // The TUI's four tabs never request these channels.
             CoreSearchPayload::MusicVideos(_) | CoreSearchPayload::Users(_) => {
-                return Err(anyhow!(i18n::t(Key::ApiLibraryPayloadMissing)))
+                unreachable!("core returned a channel the TUI did not request")
             }
         })
     }
@@ -613,14 +627,9 @@ impl Ncm {
             let Some(id) = song["id"].as_i64() else {
                 continue;
             };
-            let (requested_quality, source) = match self.song_url(id).await {
-                Ok(resolved) => resolved,
-                // A refusal is per-account, not per-track: the remaining
-                // candidates would all fail the same way.
-                Err(SongUrlFailure::Rejected(code)) => {
-                    return Err(anyhow!(i18n::t_song_url_rejected(code)))
-                }
-                Err(_) => continue,
+            let Some((requested_quality, source)) = demo_candidate_result(self.song_url(id).await)?
+            else {
+                continue;
             };
             let row = SongRow {
                 id,
@@ -660,6 +669,19 @@ impl Ncm {
             artist_id: row.artist_id,
             album_id: row.album_id,
         }
+    }
+}
+
+fn demo_candidate_result(
+    result: std::result::Result<(AudioQuality, PlaybackSource), SongUrlFailure>,
+) -> Result<Option<(AudioQuality, PlaybackSource)>> {
+    match result {
+        Ok(resolved) => Ok(Some(resolved)),
+        Err(SongUrlFailure::Unavailable) => Ok(None),
+        // Refusals and transport failures apply to the request, not one
+        // search candidate, so trying the remaining hits would hide them.
+        Err(SongUrlFailure::Rejected(code)) => Err(anyhow!(i18n::t_song_url_rejected(code))),
+        Err(SongUrlFailure::Other(error)) => Err(error),
     }
 }
 
@@ -976,6 +998,17 @@ mod tests {
 
         assert_eq!(error.to_string(), "offline");
         assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn demo_candidates_only_skip_explicitly_unavailable_tracks() {
+        assert!(demo_candidate_result(Err(SongUrlFailure::Unavailable))
+            .unwrap()
+            .is_none());
+
+        let error =
+            demo_candidate_result(Err(SongUrlFailure::Other(anyhow!("offline")))).unwrap_err();
+        assert_eq!(error.to_string(), "offline");
     }
 
     #[test]

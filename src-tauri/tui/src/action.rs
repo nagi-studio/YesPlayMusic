@@ -260,12 +260,14 @@ pub enum Action {
         seq: u64,
         query: String,
         channel: SearchChannel,
+        offset: u32,
         payload: SearchPayload,
     },
     SearchFailed {
         seq: u64,
         query: String,
         channel: SearchChannel,
+        offset: u32,
         message: String,
     },
     SearchDetailLoaded {

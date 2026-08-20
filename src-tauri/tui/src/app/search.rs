@@ -4,14 +4,14 @@ use tokio::task::AbortHandle;
 
 use crate::action::Action;
 use crate::api::{
-    AlbumHit, ArtistHit, PlaylistHit, SearchChannel, SearchChannelTabs, SearchPage, SearchPayload,
-    SongRow,
+    AlbumHit, ArtistHit, PlaylistHit, SearchChannel, SearchPage, SearchPayload, SongRow,
 };
 use crate::i18n::{self, Key};
 
 use super::{AppState, Effects};
 
 const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const SEARCH_PAGE_LIMIT: u32 = 30;
 
 impl AppState {
     pub(super) fn handle_search_key(&mut self, fx: &Effects, key: crossterm::event::KeyEvent) {
@@ -64,6 +64,7 @@ impl AppState {
             KeyCode::Down if self.search.current_len() > 0 => {
                 self.search.input = false;
                 self.selected = self.search.saved_selection();
+                self.maybe_load_more_search(fx);
             }
             _ => {}
         }
@@ -111,6 +112,26 @@ impl AppState {
             let (seq, channel) = (request.seq, request.channel);
             let task = spawn_search(fx, request);
             self.search.attach_search_task(seq, channel, task);
+        } else if self.search.current_len() > 0 {
+            if let Some(error) = self.search.current_error() {
+                self.status = Some(error.to_owned());
+            }
+        }
+    }
+
+    pub(super) fn maybe_load_more_search(&mut self, fx: &Effects) {
+        let current_len = self.search.current_len();
+        if self.view != crate::action::View::Search
+            || !self.search.is_results()
+            || self.filter.is_active()
+            || (current_len > 0 && (self.search.input || self.selected + 1 < current_len))
+        {
+            return;
+        }
+        if let Some(request) = self.search.load_more() {
+            let (seq, channel) = (request.seq, request.channel);
+            let task = spawn_search(fx, request);
+            self.search.attach_search_task(seq, channel, task);
         }
     }
 }
@@ -120,6 +141,7 @@ pub(super) struct SearchRequest {
     pub seq: u64,
     pub query: String,
     pub channel: SearchChannel,
+    pub offset: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +157,7 @@ pub struct SearchBucket<T> {
     pub error: Option<String>,
     pub searching: bool,
     loaded_query: Option<String>,
+    next_offset: u32,
     active: Option<SearchRequest>,
 }
 
@@ -146,6 +169,7 @@ impl<T> Default for SearchBucket<T> {
             error: None,
             searching: false,
             loaded_query: None,
+            next_offset: 0,
             active: None,
         }
     }
@@ -158,6 +182,7 @@ impl<T> SearchBucket<T> {
         self.error = None;
         self.searching = false;
         self.loaded_query = None;
+        self.next_offset = 0;
         self.active = None;
     }
 
@@ -174,16 +199,23 @@ impl<T> SearchBucket<T> {
     }
 
     fn begin(&mut self, request: SearchRequest) {
-        self.items.clear();
-        self.total = 0;
+        if request.offset == 0 {
+            self.items.clear();
+            self.total = 0;
+            self.loaded_query = None;
+            self.next_offset = 0;
+        }
         self.searching = true;
         self.error = None;
         self.active = Some(request);
     }
 
-    fn matches(&self, seq: u64, query: &str, channel: SearchChannel) -> bool {
-        self.active.as_ref().is_some_and(|request| {
-            request.seq == seq && request.query == query && request.channel == channel
+    fn matches(&self, request: &SearchRequest) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            active.seq == request.seq
+                && active.query == request.query
+                && active.channel == request.channel
+                && active.offset == request.offset
         })
     }
 
@@ -191,8 +223,13 @@ impl<T> SearchBucket<T> {
         self.active = None;
         self.searching = false;
         self.loaded_query = Some(request.query.clone());
-        self.items = page.items;
+        if request.offset == 0 {
+            self.items = page.items;
+        } else {
+            self.items.extend(page.items);
+        }
         self.total = page.total;
+        self.next_offset = request.offset.saturating_add(SEARCH_PAGE_LIMIT);
         self.error = None;
     }
 
@@ -200,8 +237,10 @@ impl<T> SearchBucket<T> {
         self.active = None;
         self.searching = false;
         self.loaded_query = Some(request.query.clone());
-        self.items.clear();
-        self.total = 0;
+        if request.offset == 0 {
+            self.items.clear();
+            self.total = 0;
+        }
         self.error = Some(message);
     }
 }
@@ -296,9 +335,7 @@ impl SearchState {
             return detail.rows.len();
         }
         match self.channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.items.len()
-            }
+            SearchChannel::Songs => self.songs.items.len(),
             SearchChannel::Artists => self.artists.items.len(),
             SearchChannel::Albums => self.albums.items.len(),
             SearchChannel::Playlists => self.playlists.items.len(),
@@ -310,9 +347,7 @@ impl SearchState {
             return detail.rows.len();
         }
         match self.channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.total
-            }
+            SearchChannel::Songs => self.songs.total,
             SearchChannel::Artists => self.artists.total,
             SearchChannel::Albums => self.albums.total,
             SearchChannel::Playlists => self.playlists.total,
@@ -331,9 +366,7 @@ impl SearchState {
             return detail.error.as_deref();
         }
         match self.channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.error.as_deref()
-            }
+            SearchChannel::Songs => self.songs.error.as_deref(),
             SearchChannel::Artists => self.artists.error.as_deref(),
             SearchChannel::Albums => self.albums.error.as_deref(),
             SearchChannel::Playlists => self.playlists.error.as_deref(),
@@ -401,7 +434,7 @@ impl SearchState {
         if self.bucket_is_loading(self.channel, &query) {
             return None;
         }
-        Some(self.begin_request(query, self.channel))
+        Some(self.begin_request(query, self.channel, 0))
     }
 
     pub(super) fn select_channel(
@@ -414,12 +447,39 @@ impl SearchState {
         let selected = self.saved_selection();
         let request = self.committed_query.clone().and_then(|query| {
             (!self.bucket_loaded_or_loading(self.channel, &query))
-                .then(|| self.begin_request(query, self.channel))
+                .then(|| self.begin_request(query, self.channel, 0))
         });
         (selected, request)
     }
 
-    fn begin_request(&mut self, query: String, channel: SearchChannel) -> SearchRequest {
+    pub(super) fn load_more(&mut self) -> Option<SearchRequest> {
+        let query = self.committed_query.clone()?;
+        let offset = self.current_next_offset();
+        if offset == 0
+            || usize::try_from(offset).expect("search offset must fit usize")
+                >= self.current_total()
+            || self.bucket_is_loading(self.channel, &query)
+        {
+            return None;
+        }
+        Some(self.begin_request(query, self.channel, offset))
+    }
+
+    fn current_next_offset(&self) -> u32 {
+        match self.channel {
+            SearchChannel::Songs => self.songs.next_offset,
+            SearchChannel::Artists => self.artists.next_offset,
+            SearchChannel::Albums => self.albums.next_offset,
+            SearchChannel::Playlists => self.playlists.next_offset,
+        }
+    }
+
+    fn begin_request(
+        &mut self,
+        query: String,
+        channel: SearchChannel,
+        offset: u32,
+    ) -> SearchRequest {
         if let Some(task) = self.search_tasks[channel.index()].take() {
             task.abort();
         }
@@ -428,11 +488,10 @@ impl SearchState {
             seq: self.seq,
             query,
             channel,
+            offset,
         };
         match channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.begin(request.clone())
-            }
+            SearchChannel::Songs => self.songs.begin(request.clone()),
             SearchChannel::Artists => self.artists.begin(request.clone()),
             SearchChannel::Albums => self.albums.begin(request.clone()),
             SearchChannel::Playlists => self.playlists.begin(request.clone()),
@@ -447,9 +506,7 @@ impl SearchState {
         task: AbortHandle,
     ) {
         let active_seq = match channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.active.as_ref().map(|request| request.seq)
-            }
+            SearchChannel::Songs => self.songs.active.as_ref().map(|request| request.seq),
             SearchChannel::Artists => self.artists.active.as_ref().map(|request| request.seq),
             SearchChannel::Albums => self.albums.active.as_ref().map(|request| request.seq),
             SearchChannel::Playlists => self.playlists.active.as_ref().map(|request| request.seq),
@@ -473,7 +530,7 @@ impl SearchState {
 
     fn bucket_loaded_or_loading(&self, channel: SearchChannel, query: &str) -> bool {
         match channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
+            SearchChannel::Songs => {
                 self.songs.is_loaded_for(query) || self.songs.is_loading_for(query)
             }
             SearchChannel::Artists => {
@@ -490,9 +547,7 @@ impl SearchState {
 
     fn bucket_searching(&self, channel: SearchChannel) -> bool {
         match channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.searching
-            }
+            SearchChannel::Songs => self.songs.searching,
             SearchChannel::Artists => self.artists.searching,
             SearchChannel::Albums => self.albums.searching,
             SearchChannel::Playlists => self.playlists.searching,
@@ -501,9 +556,7 @@ impl SearchState {
 
     fn bucket_is_loading(&self, channel: SearchChannel, query: &str) -> bool {
         match channel {
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                self.songs.is_loading_for(query)
-            }
+            SearchChannel::Songs => self.songs.is_loading_for(query),
             SearchChannel::Artists => self.artists.is_loading_for(query),
             SearchChannel::Albums => self.albums.is_loading_for(query),
             SearchChannel::Playlists => self.playlists.is_loading_for(query),
@@ -515,34 +568,34 @@ impl SearchState {
         seq: u64,
         query: &str,
         channel: SearchChannel,
+        offset: u32,
         payload: SearchPayload,
     ) -> bool {
         let request = SearchRequest {
             seq,
             query: query.to_owned(),
             channel,
+            offset,
         };
         let accepted = match (channel, payload) {
-            (SearchChannel::Songs, SearchPayload::Songs(page))
-                if self.songs.matches(seq, query, channel) =>
-            {
+            (SearchChannel::Songs, SearchPayload::Songs(page)) if self.songs.matches(&request) => {
                 self.songs.accept(&request, page);
                 true
             }
             (SearchChannel::Artists, SearchPayload::Artists(page))
-                if self.artists.matches(seq, query, channel) =>
+                if self.artists.matches(&request) =>
             {
                 self.artists.accept(&request, page);
                 true
             }
             (SearchChannel::Albums, SearchPayload::Albums(page))
-                if self.albums.matches(seq, query, channel) =>
+                if self.albums.matches(&request) =>
             {
                 self.albums.accept(&request, page);
                 true
             }
             (SearchChannel::Playlists, SearchPayload::Playlists(page))
-                if self.playlists.matches(seq, query, channel) =>
+                if self.playlists.matches(&request) =>
             {
                 self.playlists.accept(&request, page);
                 true
@@ -551,7 +604,9 @@ impl SearchState {
         };
         if accepted {
             self.search_tasks[channel.index()] = None;
-            self.selections[channel.index()] = 0;
+            if offset == 0 {
+                self.selections[channel.index()] = 0;
+            }
         }
         accepted
     }
@@ -561,27 +616,29 @@ impl SearchState {
         seq: u64,
         query: &str,
         channel: SearchChannel,
+        offset: u32,
         message: String,
     ) -> bool {
         let request = SearchRequest {
             seq,
             query: query.to_owned(),
             channel,
+            offset,
         };
         let accepted = match channel {
-            SearchChannel::Songs if self.songs.matches(seq, query, channel) => {
+            SearchChannel::Songs if self.songs.matches(&request) => {
                 self.songs.fail(&request, message);
                 true
             }
-            SearchChannel::Artists if self.artists.matches(seq, query, channel) => {
+            SearchChannel::Artists if self.artists.matches(&request) => {
                 self.artists.fail(&request, message);
                 true
             }
-            SearchChannel::Albums if self.albums.matches(seq, query, channel) => {
+            SearchChannel::Albums if self.albums.matches(&request) => {
                 self.albums.fail(&request, message);
                 true
             }
-            SearchChannel::Playlists if self.playlists.matches(seq, query, channel) => {
+            SearchChannel::Playlists if self.playlists.matches(&request) => {
                 self.playlists.fail(&request, message);
                 true
             }
@@ -589,7 +646,9 @@ impl SearchState {
         };
         if accepted {
             self.search_tasks[channel.index()] = None;
-            self.selections[channel.index()] = 0;
+            if offset == 0 {
+                self.selections[channel.index()] = 0;
+            }
         }
         accepted
     }
@@ -647,7 +706,7 @@ impl SearchState {
                 .items
                 .get(selected)
                 .map(|item| (item.id, item.name.clone(), item.cover_url.clone())),
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => None,
+            SearchChannel::Songs => None,
         }?;
         self.cancel_detail_task();
         self.remember_selection(selected);
@@ -713,9 +772,7 @@ impl SearchState {
                     .position(|item| item.id == detail.id),
                 self.playlists.items.len(),
             ),
-            SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                (None, self.songs.items.len())
-            }
+            SearchChannel::Songs => (None, self.songs.items.len()),
         };
         let selected =
             matching.unwrap_or_else(|| detail.parent_selected.min(len.saturating_sub(1)));
@@ -786,12 +843,14 @@ where
             seq: request.seq,
             query: request.query.clone(),
             channel: request.channel,
+            offset: request.offset,
             payload,
         },
         Ok(Err(_)) | Err(_) => Action::SearchFailed {
             seq: request.seq,
             query: request.query.clone(),
             channel: request.channel,
+            offset: request.offset,
             message: i18n::t(Key::SearchFailed).into(),
         },
     }
@@ -828,7 +887,12 @@ pub(super) fn spawn_search(fx: &Effects, request: SearchRequest) -> AbortHandle 
         let action = search_action_with_timeout(
             &request,
             SEARCH_REQUEST_TIMEOUT,
-            ncm.search_channel(&request.query, request.channel, 30),
+            ncm.search_channel(
+                &request.query,
+                request.channel,
+                SEARCH_PAGE_LIMIT,
+                request.offset,
+            ),
         )
         .await;
         let _ = actions.send(action);
@@ -845,9 +909,7 @@ pub(super) fn spawn_search_detail(fx: &Effects, request: DetailRequest) -> Abort
                 SearchChannel::Artists => ncm.artist_top_songs(request.id).await,
                 SearchChannel::Albums => ncm.album_songs(request.id).await,
                 SearchChannel::Playlists => ncm.playlist_detail_songs(request.id).await,
-                SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-                    Ok(Vec::new())
-                }
+                SearchChannel::Songs => panic!("song results do not have a detail request"),
             }
         })
         .await;
@@ -883,6 +945,7 @@ mod tests {
             songs.seq,
             &songs.query,
             songs.channel,
+            songs.offset,
             SearchPayload::Songs(SearchPage {
                 items: vec![row(1)],
                 total: 42,
@@ -907,6 +970,7 @@ mod tests {
             first.seq,
             &first.query,
             first.channel,
+            first.offset,
             SearchPayload::Songs(SearchPage {
                 items: vec![row(1)],
                 total: 1,
@@ -922,6 +986,107 @@ mod tests {
     }
 
     #[test]
+    fn later_pages_append_without_resetting_selection() {
+        let mut state = SearchState::new();
+        state.query = "query".into();
+        let first = state.submit().unwrap();
+        assert!(state.accept(
+            first.seq,
+            &first.query,
+            first.channel,
+            first.offset,
+            SearchPayload::Songs(SearchPage {
+                // Two survivors from a 30-row source page: the API cursor
+                // still advances by the requested page size.
+                items: vec![row(1), row(2)],
+                total: 31,
+            }),
+        ));
+        state.remember_selection(1);
+
+        let next = state.load_more().expect("the server reported another page");
+        assert_eq!(next.offset, SEARCH_PAGE_LIMIT);
+        assert_eq!(state.songs.items.len(), 2, "loaded rows remain visible");
+        assert!(state.current_searching());
+        assert!(state.accept(
+            next.seq,
+            &next.query,
+            next.channel,
+            next.offset,
+            SearchPayload::Songs(SearchPage {
+                items: vec![row(31)],
+                total: 31,
+            }),
+        ));
+
+        assert_eq!(
+            state
+                .songs
+                .items
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 31]
+        );
+        assert_eq!(state.saved_selection(), 1);
+        assert!(state.load_more().is_none());
+    }
+
+    #[test]
+    fn later_page_failure_keeps_rows_and_can_be_retried() {
+        let mut state = SearchState::new();
+        state.query = "query".into();
+        let first = state.submit().unwrap();
+        assert!(state.accept(
+            first.seq,
+            &first.query,
+            first.channel,
+            first.offset,
+            SearchPayload::Songs(SearchPage {
+                items: vec![row(1), row(2)],
+                total: 31,
+            }),
+        ));
+        state.remember_selection(1);
+        let failed = state.load_more().unwrap();
+
+        assert!(state.fail(
+            failed.seq,
+            &failed.query,
+            failed.channel,
+            failed.offset,
+            "network failed".into(),
+        ));
+        assert_eq!(state.songs.items.len(), 2);
+        assert_eq!(state.current_error(), Some("network failed"));
+        assert_eq!(state.saved_selection(), 1);
+
+        let retry = state.load_more().expect("tail navigation retries the page");
+        assert_eq!(retry.offset, SEARCH_PAGE_LIMIT);
+        assert!(state.current_error().is_none());
+    }
+
+    #[test]
+    fn response_with_the_wrong_offset_is_rejected() {
+        let mut state = SearchState::new();
+        state.query = "query".into();
+        let first = state.submit().unwrap();
+
+        assert!(!state.accept(
+            first.seq,
+            &first.query,
+            first.channel,
+            first.offset + SEARCH_PAGE_LIMIT,
+            SearchPayload::Songs(SearchPage {
+                items: vec![row(1)],
+                total: 1,
+            }),
+        ));
+        assert!(state.current_searching());
+        assert!(state.songs.items.is_empty());
+    }
+
+    #[test]
     fn stale_channel_and_detail_results_are_ignored() {
         let mut state = SearchState::new();
         state.query = "query".into();
@@ -931,6 +1096,7 @@ mod tests {
             songs.seq,
             &songs.query,
             songs.channel,
+            songs.offset,
             SearchPayload::Songs(SearchPage {
                 items: vec![row(1)],
                 total: 1,
@@ -1115,6 +1281,7 @@ mod tests {
             seq: 17,
             query: "pending".into(),
             channel: SearchChannel::Playlists,
+            offset: 30,
         };
 
         let action = search_action_with_timeout(
@@ -1128,6 +1295,7 @@ mod tests {
             seq,
             query,
             channel,
+            offset,
             message,
         } = action
         else {
@@ -1136,6 +1304,7 @@ mod tests {
         assert_eq!(seq, request.seq);
         assert_eq!(query, request.query);
         assert_eq!(channel, request.channel);
+        assert_eq!(offset, request.offset);
         assert_eq!(message, i18n::t(Key::SearchFailed));
     }
 

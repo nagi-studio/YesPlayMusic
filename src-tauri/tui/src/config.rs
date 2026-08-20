@@ -20,6 +20,19 @@ pub enum CoverMode {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+pub enum CoverSize {
+    Compact,
+    #[default]
+    Auto,
+    Large,
+}
+
+impl CoverSize {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Auto, Self::Large];
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum IconStyle {
     #[default]
     Unicode,
@@ -90,7 +103,7 @@ pub enum ThemeMode {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// UI language: zh | en | ja
     #[serde(deserialize_with = "deserialize_language")]
@@ -129,6 +142,8 @@ pub struct Config {
     pub icons: IconStyle,
     /// Cover renderer: palette pixel art or terminal graphics protocol.
     pub cover_mode: CoverMode,
+    /// Cover footprint preset; layout still controls its position.
+    pub cover_size: CoverSize,
     /// Pixel cover colors: source truecolor or the active theme palette.
     pub cover_palette: CoverPalette,
     /// Sub-cell glyph resolution used by the pixel renderer.
@@ -158,11 +173,28 @@ pub struct Config {
     pub spectrum_stereo: bool,
     /// Silent GitHub release check on startup; hints only, never self-updates.
     pub update_check: bool,
+    /// Play the skippable pixel-logo intro on startup and before updates.
+    pub intro_animation: bool,
 }
 
+#[derive(Debug)]
 pub struct LoadedConfig {
     pub config: Config,
     pub theme_is_explicit: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigLoadError {
+    #[error("failed to read ypm config: {0}")]
+    Read(#[source] io::Error),
+    #[error("failed to create the default ypm config: {0}")]
+    Create(#[source] io::Error),
+    #[error("invalid TOML syntax in ypm config: {0}")]
+    Syntax(#[source] toml::de::Error),
+    #[error("invalid field in ypm config: {0}")]
+    Field(#[source] toml::de::Error),
+    #[error("invalid value for ypm config field `{field}`: {value}")]
+    InvalidValue { field: &'static str, value: String },
 }
 
 impl LoadedConfig {
@@ -195,6 +227,7 @@ impl Default for Config {
             progress_style: "dot".into(),
             icons: IconStyle::Unicode,
             cover_mode: CoverMode::Pixel,
+            cover_size: CoverSize::Auto,
             cover_palette: CoverPalette::Original,
             cover_detail: CoverDetail::Half,
             pixel_scale: 1.0,
@@ -209,25 +242,31 @@ impl Default for Config {
             spectrum_sensitivity: SpectrumSensitivity::default(),
             spectrum_stereo: false,
             update_check: true,
+            intro_animation: true,
         }
     }
 }
 
 impl Config {
-    /// Missing or invalid config falls back to defaults — the TUI must
-    /// always start. A missing file gets a commented template so the
-    /// options are discoverable without reading docs.
-    pub fn load_with_metadata() -> LoadedConfig {
+    /// A missing file gets a commented template so the options are
+    /// discoverable without reading docs. Existing files are authoritative:
+    /// an unreadable or invalid config must be fixed before it can be saved.
+    pub fn load_with_metadata() -> Result<LoadedConfig, ConfigLoadError> {
         let path = config_dir().join("config.toml");
-        match std::fs::read_to_string(&path) {
+        Self::load_from(&path)
+    }
+
+    fn load_from(path: &Path) -> Result<LoadedConfig, ConfigLoadError> {
+        match std::fs::read_to_string(path) {
             Ok(text) => parse_with_metadata(&text),
-            Err(_) => {
-                let _ = write_template(&path);
-                LoadedConfig {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                write_template(path).map_err(ConfigLoadError::Create)?;
+                Ok(LoadedConfig {
                     config: Self::default(),
                     theme_is_explicit: false,
-                }
+                })
             }
+            Err(error) => Err(ConfigLoadError::Read(error)),
         }
     }
 
@@ -249,47 +288,39 @@ impl Config {
     }
 }
 
-fn parse_with_metadata(text: &str) -> LoadedConfig {
-    let Ok(value) = toml::from_str::<toml::Value>(text) else {
-        return LoadedConfig {
-            config: Config::default(),
-            theme_is_explicit: false,
-        };
-    };
+fn parse_with_metadata(text: &str) -> Result<LoadedConfig, ConfigLoadError> {
+    let value = toml::from_str::<toml::Value>(text).map_err(ConfigLoadError::Syntax)?;
     let theme_is_explicit = value
         .as_table()
         .is_some_and(|table| table.contains_key("theme"));
-    LoadedConfig {
-        config: parse_lenient(value),
+    let config = value.try_into::<Config>().map_err(ConfigLoadError::Field)?;
+    validate_config(&config)?;
+    Ok(LoadedConfig {
+        config,
         theme_is_explicit,
-    }
+    })
 }
 
-/// One unusable field value must not cost the user every other setting:
-/// the next settings write persists the whole struct, so a whole-file
-/// fallback silently overwrites theme/language/… with defaults. Admit the
-/// fields one at a time and drop only the ones that fail to deserialize —
-/// hand-written values, and enum names a downgrade no longer knows.
-fn parse_lenient(value: toml::Value) -> Config {
-    if let Ok(config) = value.clone().try_into::<Config>() {
-        return config;
+fn validate_config(config: &Config) -> Result<(), ConfigLoadError> {
+    if !matches!(config.layout.as_str(), "side" | "stacked") {
+        return Err(ConfigLoadError::InvalidValue {
+            field: "layout",
+            value: config.layout.clone(),
+        });
     }
-    let Some(table) = value.as_table() else {
-        return Config::default();
-    };
-    let mut accepted = toml::value::Table::new();
-    for (key, field) in table {
-        accepted.insert(key.clone(), field.clone());
-        if toml::Value::Table(accepted.clone())
-            .try_into::<Config>()
-            .is_err()
-        {
-            accepted.remove(key);
-        }
+    if !matches!(config.progress_style.as_str(), "dot" | "bar") {
+        return Err(ConfigLoadError::InvalidValue {
+            field: "progress_style",
+            value: config.progress_style.clone(),
+        });
     }
-    toml::Value::Table(accepted)
-        .try_into::<Config>()
-        .unwrap_or_default()
+    if !config.pixel_scale.is_finite() || !(0.5..=4.0).contains(&config.pixel_scale) {
+        return Err(ConfigLoadError::InvalidValue {
+            field: "pixel_scale",
+            value: config.pixel_scale.to_string(),
+        });
+    }
+    Ok(())
 }
 
 const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修改；手动编辑后重启生效。
@@ -307,6 +338,7 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 # progress_style = "dot"      # dot（细线+圆点）| bar（粗块）
 # icons = "unicode"           # unicode（无需特殊字体）| nerd（需要 Nerd Font）
 # cover_mode = "pixel"        # pixel（字符像素画）| original（终端原图协议，不支持时回退 pixel）
+# cover_size = "auto"         # compact | auto | large，仅调整大小；位置跟随 layout
 # cover_palette = "original"  # original（原图真彩）| theme（主题配色）
 # cover_detail = "half"       # half（1×2）| quad（2×2）| sextant（2×3）| octant（2×4，需 Unicode 16 字体）
 #                              # octant 显示方框时请切回 sextant
@@ -325,17 +357,20 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 # spectrum_sensitivity = "normal" # soft | normal | sharp 跳动灵敏度
 # spectrum_stereo = false      # 左右声道分离显示（中间低频、两侧高频）
 # update_check = true          # 启动时静默检查新版本
+# intro_animation = true       # 启动和 ypm update 时播放动画；任意键可跳过
 "#;
 
 fn deserialize_language<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
+    use serde::de::Error;
+
     let value = String::deserialize(deserializer)?;
-    Ok(match value.as_str() {
-        "zh" | "en" | "ja" => value,
-        _ => "zh".into(),
-    })
+    match value.as_str() {
+        "zh" | "en" | "ja" => Ok(value),
+        _ => Err(D::Error::custom("unsupported UI language")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -430,13 +465,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_hold_when_config_is_missing_or_broken() {
+    fn defaults_and_supported_values_are_stable() {
         let config = Config::default();
         assert_eq!(config.language, "zh");
         assert_eq!(config.quality, AudioQuality::High320);
         assert!(config.unm_enabled);
         assert_eq!(config.theme, "db16");
         assert_eq!(config.cover_mode, CoverMode::Pixel);
+        assert_eq!(config.cover_size, CoverSize::Auto);
         assert_eq!(config.cover_palette, CoverPalette::Original);
         assert_eq!(config.cover_detail, CoverDetail::Half);
         assert_eq!(config.icons, IconStyle::Unicode);
@@ -447,6 +483,7 @@ mod tests {
         assert!(config.spectrum_flatten);
         assert!(config.spectrum_gradient);
         assert!(!config.spectrum_stereo);
+        assert!(config.intro_animation);
 
         let parsed: Config = toml::from_str("quality = \"lossless\"").unwrap();
         assert_eq!(parsed.quality, AudioQuality::Lossless);
@@ -454,11 +491,13 @@ mod tests {
 
         let parsed: Config = toml::from_str("language = \"ja\"").unwrap();
         assert_eq!(parsed.language, "ja");
-        let parsed: Config = toml::from_str("language = \"fr\"").unwrap();
-        assert_eq!(parsed.language, "zh");
+        assert!(toml::from_str::<Config>("language = \"fr\"").is_err());
 
         let parsed: Config = toml::from_str("cover_mode = \"original\"").unwrap();
         assert_eq!(parsed.cover_mode, CoverMode::Original);
+
+        let parsed: Config = toml::from_str("cover_size = \"compact\"").unwrap();
+        assert_eq!(parsed.cover_size, CoverSize::Compact);
 
         let parsed: Config = toml::from_str("cover_palette = \"theme\"").unwrap();
         assert_eq!(parsed.cover_palette, CoverPalette::Theme);
@@ -487,97 +526,117 @@ mod tests {
 
     #[test]
     fn terminal_theme_only_applies_when_theme_is_implicit() {
-        let mut light = parse_with_metadata("quality = \"lossless\"");
+        let mut light = parse_with_metadata("quality = \"lossless\"").unwrap();
         assert!(!light.theme_is_explicit);
         assert!(light.should_apply_terminal_brightness());
         light.apply_terminal_brightness(Some(true));
         assert_eq!(light.config.theme, "fairyfloss");
 
-        let mut dark = parse_with_metadata("language = \"ja\"");
+        let mut dark = parse_with_metadata("language = \"ja\"").unwrap();
         dark.apply_terminal_brightness(Some(false));
         assert_eq!(dark.config.theme, "db16");
 
-        let mut unavailable = parse_with_metadata("quality = \"192\"");
+        let mut unavailable = parse_with_metadata("quality = \"192\"").unwrap();
         unavailable.apply_terminal_brightness(None);
         assert_eq!(unavailable.config.theme, "db16");
 
         for is_light in [false, true] {
-            let mut explicit = parse_with_metadata("theme = \"dracula\"");
+            let mut explicit = parse_with_metadata("theme = \"dracula\"").unwrap();
             assert!(explicit.theme_is_explicit);
             assert!(!explicit.should_apply_terminal_brightness());
             explicit.apply_terminal_brightness(Some(is_light));
             assert_eq!(explicit.config.theme, "dracula");
         }
-
-        let malformed = parse_with_metadata("theme = [");
-        assert!(!malformed.theme_is_explicit);
-        assert_eq!(malformed.config, Config::default());
-
-        let invalid_value = parse_with_metadata("theme = 42");
-        assert!(invalid_value.theme_is_explicit);
-        assert_eq!(invalid_value.config.theme, "db16");
     }
 
     #[test]
-    fn one_invalid_field_value_never_discards_the_rest_of_the_file() {
-        // "flac" is a plausible hand-written quality name the parser rejects.
-        let loaded = parse_with_metadata(
-            r#"
-language = "ja"
-quality = "flac"
-theme = "dracula"
-theme_mode = "light"
-layout = "stacked"
-icons = "nerd"
-spectrum_enabled = true
-update_check = false
-"#,
-        );
-
-        assert!(loaded.theme_is_explicit);
-        let config = loaded.config;
-        assert_eq!(config.quality, Config::default().quality);
-        assert_eq!(config.language, "ja");
-        assert_eq!(config.theme, "dracula");
-        assert_eq!(config.theme_mode, ThemeMode::Light);
-        assert_eq!(config.layout, "stacked");
-        assert_eq!(config.icons, IconStyle::Nerd);
-        assert!(config.spectrum_enabled);
-        assert!(!config.update_check);
+    fn syntax_errors_are_not_replaced_with_defaults() {
+        assert!(matches!(
+            parse_with_metadata("theme = ["),
+            Err(ConfigLoadError::Syntax(_))
+        ));
     }
 
     #[test]
-    fn unknown_enum_values_and_wrong_types_fall_back_field_by_field() {
-        // A downgrade from a newer build leaves enum names this one lacks.
-        let config = parse_with_metadata(
-            r#"
-theme = "pico8"
-spectrum_style = "plasma"
-cover_detail = "duodecant"
-pixel_scale = "chunky"
-cache_limit_mib = -1
-enter_replaces_queue = false
-idle_art = "~/art.png"
-"#,
-        )
-        .config;
-
-        assert_eq!(config.spectrum_style, Config::default().spectrum_style);
-        assert_eq!(config.cover_detail, Config::default().cover_detail);
-        assert_eq!(config.pixel_scale, Config::default().pixel_scale);
-        assert_eq!(config.cache_limit_mib, None);
-        assert_eq!(config.theme, "pico8");
-        assert!(!config.enter_replaces_queue);
-        assert_eq!(config.idle_art.as_deref(), Some("~/art.png"));
+    fn invalid_fields_are_not_dropped_from_an_otherwise_valid_file() {
+        for text in [
+            "language = \"fr\"",
+            "quality = \"flac\"",
+            "cover_detail = \"duodecant\"",
+            "pixel_scale = \"chunky\"",
+            "cache_limit_mib = -1",
+            "future_option = 7",
+        ] {
+            assert!(
+                matches!(parse_with_metadata(text), Err(ConfigLoadError::Field(_))),
+                "field should fail: {text}"
+            );
+        }
     }
 
     #[test]
-    fn unknown_keys_and_non_table_documents_keep_the_defaults() {
-        let config = parse_with_metadata("theme = \"gameboy\"\nfuture_option = 7\n").config;
-        assert_eq!(config.theme, "gameboy");
+    fn values_previously_normalized_by_callers_fail_at_the_config_boundary() {
+        for (text, field) in [
+            ("layout = \"horizontal\"", "layout"),
+            ("progress_style = \"line\"", "progress_style"),
+            ("pixel_scale = 8.0", "pixel_scale"),
+        ] {
+            assert!(matches!(
+                parse_with_metadata(text),
+                Err(ConfigLoadError::InvalidValue {
+                    field: actual,
+                    ..
+                }) if actual == field
+            ));
+        }
+    }
 
-        let config = parse_with_metadata("[[songs]]\nid = 1\n").config;
-        assert_eq!(config, Config::default());
+    #[test]
+    fn missing_config_creates_a_template_but_other_read_errors_surface() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/config.toml");
+
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.config, Config::default());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
+
+        assert!(matches!(
+            Config::load_from(directory.path()),
+            Err(ConfigLoadError::Read(_))
+        ));
+    }
+
+    #[test]
+    fn invalid_utf8_is_a_read_error_instead_of_a_missing_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        assert!(matches!(
+            Config::load_from(&path),
+            Err(ConfigLoadError::Read(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), [0xff, 0xfe]);
+    }
+
+    #[test]
+    fn invalid_existing_config_is_reported_without_rewriting_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+
+        for (contents, expected) in [
+            ("theme = [", "syntax"),
+            ("language = \"ja\"\nquality = \"flac\"\n", "field"),
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            let error = Config::load_from(&path).unwrap_err();
+            match expected {
+                "syntax" => assert!(matches!(error, ConfigLoadError::Syntax(_))),
+                "field" => assert!(matches!(error, ConfigLoadError::Field(_))),
+                _ => unreachable!(),
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        }
     }
 
     #[test]
@@ -626,6 +685,7 @@ idle_art = "~/art.png"
                 progress_style: "bar".into(),
                 icons: IconStyle::Nerd,
                 cover_mode: CoverMode::Original,
+                cover_size: CoverSize::Large,
                 cover_palette: CoverPalette::Theme,
                 cover_detail: CoverDetail::Quad,
                 pixel_scale: 1.5,
@@ -640,6 +700,7 @@ idle_art = "~/art.png"
                 spectrum_sensitivity: SpectrumSensitivity::Sharp,
                 spectrum_stereo: true,
                 update_check: false,
+                intro_animation: false,
             };
 
             let encoded = toml::to_string(&config).unwrap();

@@ -89,10 +89,10 @@ fn main() -> Result<()> {
     if let Some(Ctl::Update) = args.command {
         // The updater prints a whole screen of its own, so it follows the
         // configured language just like the TUI does.
-        let config = config::Config::load_with_metadata();
+        let config = config::Config::load_with_metadata()?;
         i18n::init(i18n::Lang::from_config(&config.config.language));
         let runtime = tokio::runtime::Runtime::new()?;
-        return runtime.block_on(self_update::run());
+        return runtime.block_on(self_update::run(config.config.intro_animation));
     }
     if let Some(command) = args.command {
         #[cfg(unix)]
@@ -115,10 +115,17 @@ fn main() -> Result<()> {
     }
     let _log_guard = init_logging(args.debug)?;
 
-    let config = config::Config::load_with_metadata();
+    let config = config::Config::load_with_metadata()?;
     i18n::init(i18n::Lang::from_config(&config.config.language));
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(app::run(config))
+    runtime.block_on(async {
+        if config.config.intro_animation {
+            let style = term::Style::detect();
+            let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+            logo::play_interactive(style, &version).await?;
+        }
+        app::run(config).await
+    })
 }
 
 /// Logs go to a file: stdout/stderr belong to the TUI.

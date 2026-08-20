@@ -19,8 +19,8 @@ const MARKER_HEART_GAP: usize = 1;
 const HEART_WIDTH: usize = 1;
 /// Keep the heart distinct from the ordinal column.
 const HEART_INDEX_GAP: usize = 1;
-/// Width of the right-aligned ordinal column.
-const INDEX_WIDTH: usize = 3;
+/// Minimum width of the right-aligned ordinal column.
+const MIN_INDEX_WIDTH: usize = 3;
 /// Gap between the ordinal and the primary title column.
 const INDEX_TITLE_GAP: usize = 2;
 /// Artist metadata keeps a stable scan width.
@@ -65,7 +65,12 @@ pub fn draw(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
     let visible = inner.height.saturating_sub(1) as usize; // header row
     let offset = super::scroll_offset(state.selected, rows.len(), visible);
     let marquee_frame = state.marquee_frame();
-    let columns = QueueColumns::for_width(inner.width as usize);
+    let max_index = rows
+        .iter()
+        .map(|(index, _)| index + 1)
+        .max()
+        .expect("non-empty rows must have a maximum ordinal");
+    let columns = QueueColumns::for_width_and_max_index(inner.width as usize, max_index);
     let mut lines = Vec::with_capacity(visible + 1);
     lines.push(columns.header(theme));
     for (visible_index, (index, row)) in rows.iter().enumerate().skip(offset).take(visible) {
@@ -98,29 +103,38 @@ pub fn draw(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(crate) fn marquee_needed(row: &crate::api::SongRow, area_width: u16) -> bool {
-    let columns = QueueColumns::for_width(super::panel_inner_width(area_width));
+pub(crate) fn marquee_needed(row: &crate::api::SongRow, area_width: u16, max_index: usize) -> bool {
+    let columns =
+        QueueColumns::for_width_and_max_index(super::panel_inner_width(area_width), max_index);
     // Same rule as the library and search lists: only the title scrolls.
     needs_marquee(&row.title, columns.title)
 }
 
 #[derive(Clone, Copy)]
 struct QueueColumns {
+    index: usize,
     title: usize,
 }
 
 impl QueueColumns {
+    #[cfg(test)]
     fn for_width(width: usize) -> Self {
+        Self::for_width_and_max_index(width, 1)
+    }
+
+    fn for_width_and_max_index(width: usize, max_index: usize) -> Self {
+        let index = MIN_INDEX_WIDTH.max(max_index.to_string().len());
         let fixed = MARKER_WIDTH
             + MARKER_HEART_GAP
             + HEART_WIDTH
             + HEART_INDEX_GAP
-            + INDEX_WIDTH
+            + index
             + INDEX_TITLE_GAP
             + ARTIST_WIDTH
             + DURATION_WIDTH
             + COLUMN_GAP * 2;
         Self {
+            index,
             title: width.saturating_sub(fixed),
         }
     }
@@ -140,7 +154,7 @@ impl QueueColumns {
                 " ".repeat(MARKER_WIDTH + MARKER_HEART_GAP + HEART_WIDTH + HEART_INDEX_GAP),
                 style,
             ),
-            Span::styled(format!("{:>INDEX_WIDTH$}", "#"), style),
+            Span::styled(format!("{:>width$}", "#", width = self.index), style),
             Span::styled(" ".repeat(INDEX_TITLE_GAP), style),
             Span::styled(
                 super::text::pad_display(i18n::t(Key::ColumnTitle), self.title),
@@ -194,7 +208,10 @@ impl QueueColumns {
                 base.fg(if liked { theme.accent2 } else { theme.faint }),
             ),
             Span::styled(" ", base),
-            Span::styled(format!("{index:>INDEX_WIDTH$}"), base.fg(theme.faint)),
+            Span::styled(
+                format!("{index:>width$}", width = self.index),
+                base.fg(theme.faint),
+            ),
             Span::styled(" ".repeat(INDEX_TITLE_GAP), base),
             Span::styled(
                 pad_or_marquee(&row.title, self.title, selected, marquee_frame),
@@ -227,7 +244,7 @@ mod tests {
             + MARKER_HEART_GAP
             + HEART_WIDTH
             + HEART_INDEX_GAP
-            + INDEX_WIDTH
+            + MIN_INDEX_WIDTH
             + INDEX_TITLE_GAP
             + ARTIST_WIDTH
             + DURATION_WIDTH
@@ -246,6 +263,42 @@ mod tests {
             assert_eq!(buffer[((width - 4) as u16, 0)].symbol(), "时");
             assert_eq!(buffer[((width - 2) as u16, 0)].symbol(), "长");
         }
+    }
+
+    #[test]
+    fn four_digit_ordinals_are_included_in_the_column_budget() {
+        let columns = QueueColumns::for_width_and_max_index(80, 1_000);
+        let state = AppState::new(&Config::default());
+        let row = SongRow {
+            id: 1,
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_ms: 180_000,
+            pic_url: None,
+            artist_id: None,
+            album_id: None,
+        };
+
+        assert_eq!(columns.index, 4);
+        assert_eq!(columns.header(&state.theme).width(), 80);
+        assert_eq!(
+            columns
+                .row(
+                    &state.theme,
+                    Style::new(),
+                    " ",
+                    "♥",
+                    1_000,
+                    &row,
+                    false,
+                    false,
+                    false,
+                    0,
+                )
+                .width(),
+            80
+        );
     }
 
     #[test]

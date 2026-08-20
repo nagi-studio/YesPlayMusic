@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::api::{AlbumHit, ArtistHit, PlaylistHit, SearchChannel, SearchChannelTabs, SongRow};
+use crate::api::{AlbumHit, ArtistHit, PlaylistHit, SearchChannel, SongRow};
 use crate::app::AppState;
 use crate::i18n::{self, Key};
 use crate::ui::text::{needs_marquee, pad_display, pad_display_right, pad_or_marquee};
@@ -37,7 +37,7 @@ const DURATION_WIDTH: usize = 5;
 /// Metadata columns are separated by one blank terminal cell.
 const COLUMN_GAP: usize = 1;
 /// Entity rows keep a compact ordinal before their primary label.
-const ENTITY_INDEX_WIDTH: usize = 3;
+const MIN_ENTITY_INDEX_WIDTH: usize = 3;
 const ENTITY_INDEX_GAP: usize = 2;
 const ENTITY_SECONDARY_MAX_WIDTH: usize = 18;
 const ENTITY_COUNT_MAX_WIDTH: usize = 20;
@@ -234,9 +234,7 @@ fn draw_channel_chip(
 
 fn channel_label(channel: SearchChannel) -> &'static str {
     i18n::t(match channel {
-        SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
-            Key::SearchSongs
-        }
+        SearchChannel::Songs => Key::SearchSongs,
         SearchChannel::Artists => Key::SearchArtists,
         SearchChannel::Albums => Key::SearchAlbums,
         SearchChannel::Playlists => Key::SearchPlaylists,
@@ -249,7 +247,7 @@ fn draw_results(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits
     }
 
     match state.search.channel {
-        SearchChannel::Songs | SearchChannel::MusicVideos | SearchChannel::Users => {
+        SearchChannel::Songs => {
             if let Some(rows) = state.search.song_rows() {
                 draw_song_rows(frame, state, area, rows, !state.search.input, hits);
             }
@@ -272,19 +270,21 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits)
 /// Returns true when the list area has been consumed by a state message.
 fn draw_pending_or_empty(frame: &mut Frame, state: &AppState, area: Rect) -> bool {
     let theme = &state.theme;
-    let message = if state.search.current_searching() {
+    let message = if state.search.current_searching() && state.search.current_len() == 0 {
         Some((i18n::t(Key::Searching), theme.dim))
-    } else if let Some(error) = state.search.current_error() {
-        Some((error, theme.accent2))
     } else if state.search.current_len() == 0 {
-        Some((
-            if state.search.query.is_empty() && state.search.is_results() {
-                i18n::t(Key::SearchPrompt)
-            } else {
-                i18n::t(Key::NoResults)
-            },
-            theme.faint,
-        ))
+        if let Some(error) = state.search.current_error() {
+            Some((error, theme.accent2))
+        } else {
+            Some((
+                if state.search.query.is_empty() && state.search.is_results() {
+                    i18n::t(Key::SearchPrompt)
+                } else {
+                    i18n::t(Key::NoResults)
+                },
+                theme.faint,
+            ))
+        }
     } else {
         None
     };
@@ -392,7 +392,7 @@ fn draw_entities<'a>(
     let rows: Vec<_> = rows.collect();
     let visible = area.height as usize;
     let offset = super::scroll_offset(state.selected, rows.len(), visible);
-    let columns = EntityColumns::for_width(area.width as usize);
+    let columns = EntityColumns::for_width_and_max_index(area.width as usize, rows.len());
     let mut lines = Vec::with_capacity(visible);
     for (visible_index, row) in rows.iter().enumerate().skip(offset).take(visible) {
         hits.rows.push((
@@ -463,19 +463,22 @@ impl<'a> EntityRow<'a> {
 
 #[derive(Clone, Copy)]
 struct EntityColumns {
+    index: usize,
     name: usize,
     secondary: usize,
     count: usize,
 }
 
 impl EntityColumns {
-    fn for_width(width: usize) -> Self {
-        let content = width.saturating_sub(ENTITY_INDEX_WIDTH + ENTITY_INDEX_GAP);
+    fn for_width_and_max_index(width: usize, max_index: usize) -> Self {
+        let index = MIN_ENTITY_INDEX_WIDTH.max(max_index.to_string().len());
+        let content = width.saturating_sub(index + ENTITY_INDEX_GAP);
         let count = ENTITY_COUNT_MAX_WIDTH.min(content / 3);
         let remainder = content.saturating_sub(count);
         let secondary = ENTITY_SECONDARY_MAX_WIDTH.min(remainder / 3);
         let gaps = usize::from(count > 0) + usize::from(secondary > 0);
         Self {
+            index,
             name: remainder.saturating_sub(secondary).saturating_sub(gaps),
             secondary,
             count,
@@ -502,7 +505,7 @@ impl EntityColumns {
         };
         let mut spans = vec![
             Span::styled(
-                format!("{index:>ENTITY_INDEX_WIDTH$}"),
+                format!("{index:>width$}", width = self.index),
                 base.fg(theme.faint),
             ),
             Span::styled(" ".repeat(ENTITY_INDEX_GAP), base),
@@ -757,15 +760,16 @@ mod tests {
     }
 
     #[test]
-    fn selected_entity_row_obeys_the_three_text_tiers() {
+    fn selected_four_digit_entity_row_obeys_width_and_text_tiers() {
         let state = AppState::new(&Config::default());
-        let columns = EntityColumns::for_width(76);
+        let columns = EntityColumns::for_width_and_max_index(76, 1_000);
         let row = EntityRow {
             name: "Album",
             secondary: "Artist",
             count: "12 Songs".into(),
         };
-        let line = columns.row(&state.theme, state.selection_style(), 1, &row, true);
+        let line = columns.row(&state.theme, state.selection_style(), 1_000, &row, true);
+        assert_eq!(columns.index, 4);
         assert_eq!(line.width(), 76);
         assert_eq!(line.spans[0].style.fg, Some(state.theme.faint));
         assert_eq!(line.spans[2].style.fg, Some(state.theme.fg));

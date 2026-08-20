@@ -16,6 +16,7 @@ mod progress;
 
 pub(crate) use brew::{refresh as brew_refresh, upgrade as brew_upgrade};
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -88,7 +89,7 @@ pub(crate) async fn install(tag: &str, on_stage: &mut impl FnMut(Stage)) -> Resu
     Ok(target)
 }
 
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(show_intro: bool) -> Result<()> {
     // A keg skips preflight entirely: the signature and asset checks guard
     // the binary swap, and a keg never reaches one.
     let brew = update::installed_via_brew();
@@ -100,14 +101,23 @@ pub(crate) async fn run() -> Result<()> {
 
     // The intro owns the screen, so anything printed before it would be
     // wiped; a terminal too small for the mark gets the wordmark instead.
-    let style = reporter.style();
-    let version = format!("v{current}");
-    if !crate::logo::play(style, &version, || false).await {
-        print!("{}", crate::logo::wordmark(style, &version));
+    if show_intro {
+        let style = reporter.style();
+        let version = format!("v{current}");
+        if !crate::logo::play_interactive(style, &version).await? {
+            print!("{}", crate::logo::wordmark(style, &version));
+        }
     }
 
     let checking = i18n::t_update_checking();
     let found = progress::spin(&mut reporter, checking, update::check(current)).await;
+    let found = match found {
+        Ok(found) => found,
+        Err(error) => {
+            reporter.abort();
+            return Err(error);
+        }
+    };
     let Some(tag) = found else {
         reporter.abort();
         reporter.mark(i18n::t_update_up_to_date(), &format!("v{current}"));
@@ -232,31 +242,68 @@ fn verify(pubkey: &str, binary: &[u8], signature: &[u8]) -> Result<()> {
 }
 
 fn swap_in(target: &Path, binary: &[u8]) -> Result<()> {
-    let staged = staged_path(target);
-    std::fs::write(&staged, binary).with_context(|| format!("写入 {} 失败", staged.display()))?;
+    let parent = target.parent().context("可执行文件没有父目录")?;
+    let target_name = target.file_name().context("可执行文件路径缺少文件名")?;
+    let prefix = format!(".{}.", target_name.to_string_lossy());
+    let mut staged = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".new")
+        .tempfile_in(parent)
+        .with_context(|| format!("无法在 {} 创建更新临时文件", parent.display()))?;
+    staged
+        .write_all(binary)
+        .with_context(|| format!("写入 {} 失败", staged.path().display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+        staged
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))?;
     }
     #[cfg(windows)]
     {
-        // A running exe cannot be replaced, but it can be renamed away.
-        let parked = target.with_extension("old.exe");
-        let _ = std::fs::remove_file(&parked);
-        std::fs::rename(target, &parked).context("移开旧版可执行文件失败")?;
+        replace_windows(target, staged)?;
+        return Ok(());
     }
-    std::fs::rename(&staged, target).with_context(|| format!("替换 {} 失败", target.display()))
+    #[cfg(not(windows))]
+    staged
+        .persist(target)
+        .map(|_| ())
+        .map_err(|error| error.error)
+        .with_context(|| format!("替换 {} 失败", target.display()))
 }
 
-/// Same directory as the target so the final rename never crosses devices.
-fn staged_path(target: &Path) -> PathBuf {
-    let mut name = target
-        .file_name()
-        .map(|name| name.to_os_string())
-        .unwrap_or_else(|| "ypm".into());
-    name.push(".new");
-    target.with_file_name(name)
+#[cfg(any(windows, test))]
+fn rollback_windows_replace(
+    target: &Path,
+    parked: &Path,
+    replace_error: std::io::Error,
+    rollback: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
+    match rollback(parked, target) {
+        Ok(()) => Err(replace_error).context("替换可执行文件失败，旧版已恢复"),
+        Err(rollback_error) => Err(anyhow::anyhow!(
+            "替换可执行文件失败：{replace_error}；恢复旧版也失败：{rollback_error}；旧版位于 {}",
+            parked.display()
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn replace_windows(target: &Path, staged: tempfile::NamedTempFile) -> Result<()> {
+    let parked = target.with_extension("old.exe");
+    match std::fs::remove_file(&parked) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("清理上一个旧版可执行文件失败"),
+    }
+    std::fs::rename(target, &parked).context("移开旧版可执行文件失败")?;
+    match staged.persist(target) {
+        Ok(_) => Ok(()),
+        Err(error) => rollback_windows_replace(target, &parked, error.error, |from, to| {
+            std::fs::rename(from, to)
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -264,9 +311,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn staging_stays_next_to_the_target_binary() {
-        let staged = staged_path(Path::new("/home/user/.local/bin/ypm"));
-        assert_eq!(staged, Path::new("/home/user/.local/bin/ypm.new"));
+    #[cfg(unix)]
+    fn predictable_symlink_cannot_capture_the_update_bytes() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("ypm");
+        let victim = directory.path().join("victim");
+        let predictable = directory.path().join("ypm.new");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::write(&victim, b"keep me").unwrap();
+        symlink(&victim, &predictable).unwrap();
+
+        swap_in(&target, b"new binary").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new binary");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert_eq!(std::fs::read_link(&predictable).unwrap(), victim);
+    }
+
+    #[test]
+    fn windows_replacement_rolls_back_when_installing_the_staged_file_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("ypm.exe");
+        let staged = directory.path().join("staged.exe");
+        let parked = directory.path().join("ypm.old.exe");
+        std::fs::write(&target, b"old binary").unwrap();
+        std::fs::write(&staged, b"new binary").unwrap();
+        std::fs::rename(&target, &parked).unwrap();
+
+        let error = rollback_windows_replace(
+            &target,
+            &parked,
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "locked"),
+            |from, to| std::fs::rename(from, to),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("旧版已恢复"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old binary");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"new binary");
+        assert!(!parked.exists());
     }
 
     #[test]

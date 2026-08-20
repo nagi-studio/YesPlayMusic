@@ -183,6 +183,7 @@ impl AppState {
                 } else {
                     self.selected = self.visible_len().saturating_sub(1);
                 }
+                self.maybe_load_more_search(fx);
             }
             Action::ConfirmYes => {}
             Action::ForceRedraw => self.force_redraw = true,
@@ -295,6 +296,7 @@ impl AppState {
                     let next = (self.selected as i32 + delta).clamp(0, last);
                     self.selected = next as usize;
                 }
+                self.maybe_load_more_search(fx);
             }
             Action::MovePage(pages) => {
                 if self.view == View::Library && self.sidebar_focus {
@@ -306,6 +308,7 @@ impl AppState {
                     let next = (self.selected as i32 + delta).clamp(0, len as i32 - 1);
                     self.selected = next as usize;
                 }
+                self.maybe_load_more_search(fx);
             }
             Action::Activate => match self.view {
                 View::Settings => self.save_settings(fx),
@@ -476,6 +479,7 @@ impl AppState {
                         View::Search => self.search.input = false,
                         _ => {}
                     }
+                    self.maybe_load_more_search(fx);
                 }
             }
             Action::Mouse(_) => {} // resolved against Hits in the event loop
@@ -517,25 +521,34 @@ impl AppState {
                 seq,
                 query,
                 channel,
+                offset,
                 payload,
             } => {
                 let is_current = self.view == View::Search
                     && self.search.is_results()
                     && self.search.channel == channel;
-                if self.search.accept(seq, &query, channel, payload)
-                    && is_current
-                    && self.search.current_len() > 0
-                {
-                    self.selected = 0;
+                if self.search.accept(seq, &query, channel, offset, payload) {
+                    if is_current && offset == 0 && self.search.current_len() > 0 {
+                        self.selected = 0;
+                    }
+                    if is_current {
+                        self.maybe_load_more_search(fx);
+                    }
                 }
             }
             Action::SearchFailed {
                 seq,
                 query,
                 channel,
+                offset,
                 message,
             } => {
-                self.search.fail(seq, &query, channel, message);
+                let append_message = (offset > 0).then(|| message.clone());
+                if self.search.fail(seq, &query, channel, offset, message) {
+                    if let Some(message) = append_message {
+                        self.status = Some(message);
+                    }
+                }
             }
             Action::SearchDetailLoaded {
                 seq,
@@ -867,13 +880,22 @@ impl AppState {
         let progress = fx.actions.clone();
         let finished = fx.actions.clone();
         tokio::spawn(async move {
-            let tag = match known {
-                Some(tag) => Some(tag),
+            let checked = match known {
+                Some(tag) => Ok(Some(tag)),
                 None => crate::update::check(env!("CARGO_PKG_VERSION")).await,
             };
-            let Some(tag) = tag else {
-                let _ = finished.send(Action::SelfUpdateFinished(SelfUpdateOutcome::UpToDate));
-                return;
+            let tag = match checked {
+                Ok(Some(tag)) => tag,
+                Ok(None) => {
+                    let _ = finished.send(Action::SelfUpdateFinished(SelfUpdateOutcome::UpToDate));
+                    return;
+                }
+                Err(error) => {
+                    let _ = finished.send(Action::SelfUpdateFinished(SelfUpdateOutcome::Failed(
+                        error.to_string(),
+                    )));
+                    return;
+                }
             };
             if brew {
                 let _ = progress.send(Action::SelfUpdateProgress(

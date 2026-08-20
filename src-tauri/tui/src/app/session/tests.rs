@@ -170,6 +170,27 @@ async fn a_login_attempt_supersedes_an_in_flight_session_restore() {
 }
 
 #[tokio::test]
+async fn offline_restore_reports_a_corrupted_profile_instead_of_adopting_a_snapshot_uid() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    fx.store
+        .save(42, "liked", &[crate::store::StoredSong::from(&row(42))])
+        .unwrap();
+    std::fs::write(directory.path().join("library/profile.json"), b"{broken").unwrap();
+    let mut state = AppState::new(&Config::default());
+    let epoch = state.session.begin_restore();
+
+    state.apply_session_restore_failed(&fx, epoch, RestoreFailure::Offline);
+
+    assert!(state.session.current_stamp().is_none());
+    assert!(state.session.nickname.is_none());
+    assert!(state.library.iter().all(|song| song.id != 42));
+    let status = state.status.as_deref().unwrap();
+    assert!(status.contains("stored profile"));
+    assert!(status.contains("invalid"));
+}
+
+#[tokio::test]
 async fn personal_results_from_the_previous_account_are_ignored_and_not_saved_for_the_next() {
     let directory = tempfile::tempdir().unwrap();
     let fx = effects(&directory);

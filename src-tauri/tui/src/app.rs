@@ -28,7 +28,7 @@ use yesplaymusic_core::cache::{
 
 use crate::action::{Action, CoverRenderRequest, CoverSurface, View};
 use crate::api::{self, Ncm, SongRow, Source};
-use crate::config::{self, Config, CoverMode, LoadedConfig};
+use crate::config::{self, Config, CoverMode, CoverSize, LoadedConfig};
 use crate::cover_cache::{CoverCache, PixelKeyInputs};
 use crate::event;
 use crate::i18n::{self, Key};
@@ -77,6 +77,14 @@ const COVER_SOURCE_EDGES: [u32; 4] = [1024, 1536, 2048, 3072];
 pub(crate) const PREVIEW_CELLS: (u16, u16) = (22, 11);
 const HOT_PIXEL_COVER_LIMIT: usize = 64;
 const GRAPHICS_GEOMETRY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+fn cover_height_for_preset(available: u16, preset: CoverSize) -> u16 {
+    match preset {
+        CoverSize::Compact => available.saturating_mul(2).div_ceil(3).clamp(8, 28),
+        CoverSize::Auto => available.clamp(8, 40),
+        CoverSize::Large => available.clamp(8, 56),
+    }
+}
 
 struct OriginalCover {
     picker: Picker,
@@ -420,17 +428,47 @@ fn initialize_cover_cache() -> Option<Arc<CoverCache>> {
 
 fn spawn_resize_worker(
     mut requests: mpsc::UnboundedReceiver<ResizeRequest>,
-    responses: mpsc::UnboundedSender<ResizeResponse>,
+    responses: mpsc::UnboundedSender<std::result::Result<ResizeResponse, String>>,
 ) {
     tokio::spawn(async move {
         while let Some(request) = requests.recv().await {
             let response = tokio::task::spawn_blocking(move || request.resize_encode()).await;
-            let Ok(Ok(response)) = response else { continue };
+            let response = match response {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(error)) => Err(format!("cover resize failed: {error}")),
+                Err(error) => Err(format!("cover resize worker panicked: {error}")),
+            };
+            let failed = response.is_err();
             if responses.send(response).is_err() {
+                break;
+            }
+            if failed {
                 break;
             }
         }
     });
+}
+
+fn resize_worker_response(
+    response: Option<std::result::Result<ResizeResponse, String>>,
+    surface: &str,
+) -> Result<ResizeResponse> {
+    match response {
+        Some(Ok(response)) => Ok(response),
+        Some(Err(error)) => Err(anyhow::anyhow!(error)),
+        None => Err(anyhow::anyhow!("{surface} cover resize worker stopped")),
+    }
+}
+
+/// A dead encoder must be visible, not fatal: the worker owns the protocol
+/// ratatui-image took out of the surface, so the artwork can never come back
+/// — but the queue is still playing. Say so, then drop every original-cover
+/// surface so rendering falls back to pixel art instead of a blank frame.
+fn degrade_original_covers(state: &mut AppState, error: &anyhow::Error) {
+    state.original_cover = None;
+    state.selected_original_cover = None;
+    state.bar_original_cover = None;
+    state.set_command_feedback(i18n::t_cover_encoder_failed(&error.to_string()), true);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -492,9 +530,18 @@ pub enum PlayLayout {
 impl PlayLayout {
     fn from_config(value: &str) -> Self {
         match value {
+            "side" => Self::Side,
             "stacked" => Self::Stacked,
-            _ => Self::Side,
+            _ => unreachable!("layout was validated before app initialization: {value}"),
         }
+    }
+}
+
+fn thick_progress_from_config(value: &str) -> bool {
+    match value {
+        "dot" => false,
+        "bar" => true,
+        _ => unreachable!("progress style was validated before app initialization: {value}"),
     }
 }
 
@@ -731,8 +778,8 @@ impl AppState {
             cover: None,
             bar_cover: None,
             layout: PlayLayout::from_config(&config.layout),
-            thick_progress: config.progress_style == "bar",
-            pixel_detail_scale: config.pixel_scale.clamp(0.5, 4.0),
+            thick_progress: thick_progress_from_config(&config.progress_style),
+            pixel_detail_scale: config.pixel_scale,
             original_cover: None,
             selected_original_cover: None,
             bar_original_cover: None,
@@ -889,7 +936,7 @@ impl AppState {
             PlayLayout::Side => main_rows,
             PlayLayout::Stacked => main_rows / 2,
         };
-        let height = height.clamp(8, 40);
+        let height = cover_height_for_preset(height, self.config.cover_size);
         let content_width = ui::centered_content_for(
             Rect::new(0, 0, cols, rows),
             ui::max_content_width(self.view),
@@ -939,6 +986,20 @@ impl AppState {
             .map(|(underlying, row)| (*underlying, (*row).clone()))
     }
 
+    fn max_visible_ordinal(&self) -> usize {
+        let rows = match self.view {
+            View::Library => self.library.as_slice(),
+            View::Queue => self.queue.as_slice(),
+            _ => return 1,
+        };
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| self.filter.matches(row))
+            .map(|(index, _)| index + 1)
+            .max()
+            .unwrap_or(1)
+    }
+
     fn active_marquee_target(&self) -> Option<MarqueeTarget> {
         if self.terminal_size.1 < 8 {
             let now = self.now.as_ref()?;
@@ -971,10 +1032,13 @@ impl AppState {
         )
         .width;
         let preview_visible = self.selection_preview_visible();
+        let max_index = self.max_visible_ordinal();
         let needs_marquee = match self.view {
-            View::Library => ui::library::marquee_needed(&row, shell_width, preview_visible),
+            View::Library => {
+                ui::library::marquee_needed(&row, shell_width, preview_visible, max_index)
+            }
             View::Search => ui::search::marquee_needed(&row, shell_width, preview_visible),
-            View::Queue => ui::queue::marquee_needed(&row, shell_width),
+            View::Queue => ui::queue::marquee_needed(&row, shell_width, max_index),
             _ => false,
         };
         if !needs_marquee {
@@ -2316,15 +2380,16 @@ async fn download_and_send_cover(
     send_cover(actions, &load.request, processed);
 }
 
-/// Tiny most-recently-used cache of decoded (and upscaled) originals. Six
-/// covers ≈ 24 MB; enough for back-and-forth track switches and the
-/// playing/bar surfaces sharing one decode.
+/// Tiny most-recently-used cache of decoded (and upscaled) originals.
 static DECODED_COVERS: std::sync::Mutex<Vec<(String, DynamicImage)>> =
     std::sync::Mutex::new(Vec::new());
 const DECODED_COVER_CAP: usize = 6;
+const DECODED_COVER_BUDGET: usize = 48 * 1024 * 1024;
 
 fn cached_decoded_cover(source_key: &str) -> Option<DynamicImage> {
-    let mut cache = DECODED_COVERS.lock().ok()?;
+    let mut cache = DECODED_COVERS
+        .lock()
+        .expect("decoded cover cache mutex poisoned");
     let position = cache.iter().position(|(key, _)| key == source_key)?;
     let entry = cache.remove(position);
     let image = entry.1.clone();
@@ -2333,14 +2398,21 @@ fn cached_decoded_cover(source_key: &str) -> Option<DynamicImage> {
 }
 
 fn store_decoded_cover(source_key: &str, image: &DynamicImage) {
-    let Ok(mut cache) = DECODED_COVERS.lock() else {
-        return;
-    };
+    let mut cache = DECODED_COVERS
+        .lock()
+        .expect("decoded cover cache mutex poisoned");
     if let Some(position) = cache.iter().position(|(key, _)| key == source_key) {
         cache.remove(position);
     }
     cache.push((source_key.to_owned(), image.clone()));
-    if cache.len() > DECODED_COVER_CAP {
+    while cache.len() > DECODED_COVER_CAP
+        || (cache.len() > 1
+            && cache
+                .iter()
+                .map(|(_, image)| image.as_bytes().len())
+                .sum::<usize>()
+                > DECODED_COVER_BUDGET)
+    {
         cache.remove(0);
     }
 }
@@ -2367,12 +2439,9 @@ async fn process_cover(
             // originals. Terminal graphics never upscale (Resize::Fit), so a
             // small source would render as a small cover in a big window —
             // upscale once here and every cover fills its area.
-            let image = if image.width().max(image.height()) < COVER_SOURCE_EDGE {
-                image.resize(
-                    COVER_SOURCE_EDGE,
-                    COVER_SOURCE_EDGE,
-                    image::imageops::FilterType::CatmullRom,
-                )
+            let edge = load.request.source_edge;
+            let image = if image.width().max(image.height()) < edge {
+                image.resize(edge, edge, image::imageops::FilterType::CatmullRom)
             } else {
                 image
             };
@@ -2704,7 +2773,7 @@ async fn event_loop(
     if config.update_check {
         let update_tx = actions_tx.clone();
         tokio::spawn(async move {
-            if let Some(tag) = crate::update::check(env!("CARGO_PKG_VERSION")).await {
+            if let Ok(Some(tag)) = crate::update::check(env!("CARGO_PKG_VERSION")).await {
                 let _ = update_tx.send(Action::UpdateAvailable(tag));
             }
         });
@@ -2813,47 +2882,35 @@ async fn event_loop(
                     apply(&mut state, action, &fx, &hits);
                 }
             }
-            // A closed cover channel means its resize worker died. Covers are
-            // cosmetic: drop back to pixel art instead of exiting the app.
             response = playing_responses.recv(), if state.original_cover.is_some() => {
-                let Some(response) = response else {
-                    tracing::warn!("playing cover worker gone, disabling original cover");
-                    state.original_cover = None;
-                    continue;
-                };
-                state.apply_original_resize(response);
+                match resize_worker_response(response, "playing") {
+                    Ok(response) => state.apply_original_resize(response),
+                    Err(error) => degrade_original_covers(&mut state, &error),
+                }
             }
             response = selected_responses.recv(), if state.selected_original_cover.is_some() => {
-                let Some(response) = response else {
-                    tracing::warn!("selection cover worker gone, disabling original cover");
-                    state.selected_original_cover = None;
-                    continue;
-                };
-                state.apply_selected_original_resize(response);
+                match resize_worker_response(response, "selection") {
+                    Ok(response) => state.apply_selected_original_resize(response),
+                    Err(error) => degrade_original_covers(&mut state, &error),
+                }
             }
             response = selected_pending_responses.recv(), if state.selected_original_cover.is_some() => {
-                let Some(response) = response else {
-                    tracing::warn!("selection pending cover worker gone, disabling original cover");
-                    state.selected_original_cover = None;
-                    continue;
-                };
-                state.apply_selected_pending_resize(response);
+                match resize_worker_response(response, "selection pending") {
+                    Ok(response) => state.apply_selected_pending_resize(response),
+                    Err(error) => degrade_original_covers(&mut state, &error),
+                }
             }
             response = playing_pending_responses.recv(), if state.original_cover.is_some() => {
-                let Some(response) = response else {
-                    tracing::warn!("playing pending cover worker gone, disabling original cover");
-                    state.original_cover = None;
-                    continue;
-                };
-                state.apply_playing_pending_resize(response);
+                match resize_worker_response(response, "playing pending") {
+                    Ok(response) => state.apply_playing_pending_resize(response),
+                    Err(error) => degrade_original_covers(&mut state, &error),
+                }
             }
             response = bar_responses.recv(), if state.bar_original_cover.is_some() => {
-                let Some(response) = response else {
-                    tracing::warn!("bar cover worker gone, disabling original cover");
-                    state.bar_original_cover = None;
-                    continue;
-                };
-                state.apply_bar_original_resize(response);
+                match resize_worker_response(response, "bar") {
+                    Ok(response) => state.apply_bar_original_resize(response),
+                    Err(error) => degrade_original_covers(&mut state, &error),
+                }
             }
             _ = ui_tick.tick(), if state.needs_ui_tick() => {
                 state.update(Action::UiTick, &fx);

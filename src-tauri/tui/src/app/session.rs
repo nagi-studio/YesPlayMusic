@@ -174,7 +174,7 @@ impl AppState {
                 }
             }
             RestoreFailure::Offline => match fx.store.load_profile() {
-                Some(profile) => {
+                Ok(Some(profile)) => {
                     let Some(stamp) =
                         self.session
                             .accept_restore(epoch, profile.uid, profile.nickname)
@@ -187,9 +187,14 @@ impl AppState {
                     self.library_synced = true;
                     self.status = Some(i18n::t(Key::OfflineLibrary).into());
                 }
-                None => {
+                Ok(None) => {
                     if self.session.fail_restore(epoch) {
                         self.status = Some(i18n::t(Key::NetworkUnavailable).into());
+                    }
+                }
+                Err(error) => {
+                    if self.session.fail_restore(epoch) {
+                        self.status = Some(error.to_string());
                     }
                 }
             },

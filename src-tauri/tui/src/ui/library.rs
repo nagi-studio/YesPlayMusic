@@ -27,8 +27,8 @@ pub(crate) const PREVIEW_MIN_TERMINAL_WIDTH: u16 = SIDEBAR_PANEL_WIDTH
     + cover_preview::WIDTH;
 /// Hide the sidebar before either adjacent panel becomes too narrow.
 pub const COLLAPSE_BELOW: u16 = SIDEBAR_PANEL_WIDTH + super::PANEL_GAP_X + MIN_LIST_PANEL_WIDTH;
-/// Width of the right-aligned ordinal column.
-const INDEX_WIDTH: usize = 3;
+/// Minimum width of the right-aligned ordinal column.
+const MIN_INDEX_WIDTH: usize = 3;
 /// Gap between the ordinal and the primary title column.
 const INDEX_TITLE_GAP: usize = 2;
 /// Compact lists reserve a stable baseline for the song title.
@@ -74,6 +74,7 @@ pub(crate) fn marquee_needed(
     row: &crate::api::SongRow,
     area_width: u16,
     preview_visible: bool,
+    max_index: usize,
 ) -> bool {
     let content_width = if area_width >= COLLAPSE_BELOW {
         area_width.saturating_sub(SIDEBAR_PANEL_WIDTH + super::PANEL_GAP_X)
@@ -86,7 +87,8 @@ pub(crate) fn marquee_needed(
     } else {
         (content, None)
     };
-    let columns = SongColumns::for_width(super::panel_inner_width(list.width));
+    let columns =
+        SongColumns::for_width_and_max_index(super::panel_inner_width(list.width), max_index);
     // Only the title scrolls in a row: it is what identifies the track, and
     // two runs sliding off one frame counter read as the whole row moving.
     // The artist and album columns truncate, as the album already did.
@@ -192,7 +194,12 @@ fn draw_list(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
     let visible = inner.height.saturating_sub(1) as usize; // header row
     let offset = super::scroll_offset(state.selected, rows.len(), visible);
     let marquee_frame = state.marquee_frame();
-    let columns = SongColumns::for_width(inner.width as usize);
+    let max_index = rows
+        .iter()
+        .map(|(index, _)| index + 1)
+        .max()
+        .expect("non-empty rows must have a maximum ordinal");
+    let columns = SongColumns::for_width_and_max_index(inner.width as usize, max_index);
 
     let mut lines = Vec::with_capacity(visible + 1);
     lines.push(columns.header(theme));
@@ -222,30 +229,36 @@ fn draw_list(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hits) {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SongColumns {
+    index: usize,
     title: usize,
     artist: usize,
     album: Option<usize>,
 }
 
 impl SongColumns {
+    #[cfg(test)]
     fn for_width(width: usize) -> Self {
+        Self::for_width_and_max_index(width, 1)
+    }
+
+    fn for_width_and_max_index(width: usize, max_index: usize) -> Self {
+        let index = MIN_INDEX_WIDTH.max(max_index.to_string().len());
         if width >= ALBUM_COLUMN_MIN_INNER_WIDTH {
-            let fixed = INDEX_WIDTH
-                + INDEX_TITLE_GAP
-                + WIDE_METADATA_WIDTH * 2
-                + DURATION_WIDTH
-                + COLUMN_GAP * 3;
+            let fixed =
+                index + INDEX_TITLE_GAP + WIDE_METADATA_WIDTH * 2 + DURATION_WIDTH + COLUMN_GAP * 3;
             return Self {
+                index,
                 title: width.saturating_sub(fixed),
                 artist: WIDE_METADATA_WIDTH,
                 album: Some(WIDE_METADATA_WIDTH),
             };
         }
 
-        let fixed = INDEX_WIDTH + INDEX_TITLE_GAP + DURATION_WIDTH + COLUMN_GAP * 2;
+        let fixed = index + INDEX_TITLE_GAP + DURATION_WIDTH + COLUMN_GAP * 2;
         let available = width.saturating_sub(fixed);
         let title = COMPACT_TITLE_WIDTH.min(available);
         Self {
+            index,
             title,
             artist: available.saturating_sub(title),
             album: None,
@@ -263,7 +276,7 @@ impl SongColumns {
     ) -> Line<'static> {
         let style = Style::new().fg(theme.faint);
         let mut spans = vec![
-            Span::styled(format!("{:>INDEX_WIDTH$}", "#"), style),
+            Span::styled(format!("{:>width$}", "#", width = self.index), style),
             Span::styled(" ".repeat(INDEX_TITLE_GAP), style),
             Span::styled(pad_display(i18n::t(Key::ColumnTitle), self.title), style),
             Span::styled(" ", style),
@@ -304,7 +317,10 @@ impl SongColumns {
             base.fg(theme.fg)
         };
         let mut spans = vec![
-            Span::styled(format!("{index:>INDEX_WIDTH$}"), base.fg(theme.faint)),
+            Span::styled(
+                format!("{index:>width$}", width = self.index),
+                base.fg(theme.faint),
+            ),
             Span::styled(" ".repeat(INDEX_TITLE_GAP), base),
             Span::styled(
                 pad_or_marquee(&row.title, self.title, selected, marquee_frame),
@@ -369,6 +385,7 @@ mod tests {
         assert_eq!(
             compact,
             SongColumns {
+                index: MIN_INDEX_WIDTH,
                 title: 28,
                 artist: 16,
                 album: None,
@@ -377,6 +394,7 @@ mod tests {
         assert_eq!(
             standard,
             SongColumns {
+                index: MIN_INDEX_WIDTH,
                 title: 41,
                 artist: 7,
                 album: Some(7),
@@ -385,6 +403,7 @@ mod tests {
         assert_eq!(
             centered_wide,
             SongColumns {
+                index: MIN_INDEX_WIDTH,
                 title: 31,
                 artist: 7,
                 album: Some(7),
@@ -397,7 +416,7 @@ mod tests {
     #[test]
     fn cjk_duration_header_fits_every_supported_library_width() {
         let state = AppState::new(&Config::default());
-        let minimum = INDEX_WIDTH + INDEX_TITLE_GAP + DURATION_WIDTH + COLUMN_GAP * 2;
+        let minimum = MIN_INDEX_WIDTH + INDEX_TITLE_GAP + DURATION_WIDTH + COLUMN_GAP * 2;
 
         for width in minimum..=200 {
             let header = SongColumns::for_width(width).header_with_duration(&state.theme, "时长");
@@ -412,6 +431,31 @@ mod tests {
             assert_eq!(buffer[((width - 4) as u16, 0)].symbol(), "时");
             assert_eq!(buffer[((width - 2) as u16, 0)].symbol(), "长");
         }
+    }
+
+    #[test]
+    fn four_digit_ordinals_are_included_in_the_column_budget() {
+        let columns = SongColumns::for_width_and_max_index(68, 1_000);
+        let state = AppState::new(&Config::default());
+        let row = crate::api::SongRow {
+            id: 1,
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_ms: 180_000,
+            pic_url: None,
+            artist_id: None,
+            album_id: None,
+        };
+
+        assert_eq!(columns.index, 4);
+        assert_eq!(columns.header(&state.theme).width(), 68);
+        assert_eq!(
+            columns
+                .row(&state.theme, Style::new(), 1_000, &row, false, 0)
+                .width(),
+            68
+        );
     }
 
     #[test]
@@ -452,12 +496,12 @@ mod tests {
         // Only the title earns the marquee, so an over-long artist alone must
         // not arm it — otherwise the whole selected row slides for a
         // secondary field the album column already truncates.
-        assert!(!marquee_needed(&row, 200, false));
+        assert!(!marquee_needed(&row, 200, false, 1));
         let with_long_title = crate::api::SongRow {
             title: "A deliberately long track title that cannot fit either".into(),
             ..row
         };
-        assert!(marquee_needed(&with_long_title, 60, false));
+        assert!(marquee_needed(&with_long_title, 60, false, 1));
     }
 
     #[test]

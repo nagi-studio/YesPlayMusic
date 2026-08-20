@@ -258,6 +258,17 @@ fn the_source_resolution_follows_the_cover_box_in_real_pixels() {
 }
 
 #[test]
+fn cover_size_presets_keep_auto_stable_and_bound_the_extremes() {
+    assert_eq!(cover_height_for_preset(20, CoverSize::Compact), 14);
+    assert_eq!(cover_height_for_preset(20, CoverSize::Auto), 20);
+    assert_eq!(cover_height_for_preset(20, CoverSize::Large), 20);
+
+    assert_eq!(cover_height_for_preset(80, CoverSize::Compact), 28);
+    assert_eq!(cover_height_for_preset(80, CoverSize::Auto), 40);
+    assert_eq!(cover_height_for_preset(80, CoverSize::Large), 56);
+}
+
+#[test]
 fn the_cover_box_is_square_in_pixels_not_in_assumed_cells() {
     let mut state = AppState::new(&Config::default());
     // No graphics picker: half-block art packs two sub-pixels per cell, so a
@@ -1498,6 +1509,33 @@ async fn settings_preview_can_be_cancelled_without_touching_disk() {
 }
 
 #[tokio::test]
+async fn intro_and_cover_size_settings_cycle_and_persist() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.update(Action::SwitchView(View::Settings), &fx);
+
+    state.settings.selected = super::settings::SettingField::ALL
+        .iter()
+        .position(|field| *field == super::settings::SettingField::CoverSize)
+        .unwrap();
+    state.update(Action::AdjustSetting(1), &fx);
+    assert_eq!(state.config.cover_size, CoverSize::Large);
+
+    state.settings.selected = super::settings::SettingField::ALL
+        .iter()
+        .position(|field| *field == super::settings::SettingField::IntroAnimation)
+        .unwrap();
+    state.update(Action::AdjustSetting(1), &fx);
+    assert!(!state.config.intro_animation);
+
+    state.update(Action::SaveSettings, &fx);
+    let saved: Config = toml::from_str(&std::fs::read_to_string(&fx.config_path).unwrap()).unwrap();
+    assert_eq!(saved.cover_size, CoverSize::Large);
+    assert!(!saved.intro_animation);
+}
+
+#[tokio::test]
 async fn icon_setting_previews_immediately_and_cancel_restores_unicode() {
     let directory = tempfile::tempdir().unwrap();
     let fx = effects(&directory);
@@ -1617,6 +1655,7 @@ async fn escape_walks_out_of_search_instead_of_bouncing_back_to_input() {
         request.seq,
         &request.query,
         request.channel,
+        request.offset,
         crate::api::SearchPayload::Songs(crate::api::SearchPage {
             items: vec![row(1)],
             total: 1,
@@ -1873,6 +1912,7 @@ async fn editing_search_rejects_results_and_failures_for_the_previous_query() {
                 seq: request.seq,
                 query: request.query,
                 channel: request.channel,
+                offset: request.offset,
                 payload: crate::api::SearchPayload::Songs(crate::api::SearchPage {
                     items: vec![row(1)],
                     total: 1,
@@ -1885,6 +1925,7 @@ async fn editing_search_rejects_results_and_failures_for_the_previous_query() {
                 seq: stale_seq,
                 query: stale_query,
                 channel: request.channel,
+                offset: request.offset,
                 message: "old failure".into(),
             },
             &fx,
@@ -1909,6 +1950,7 @@ async fn search_row_click_selects_first_then_activates() {
         request.seq,
         &request.query,
         request.channel,
+        request.offset,
         crate::api::SearchPayload::Songs(crate::api::SearchPage {
             items: vec![row(1), row(2)],
             total: 2,
@@ -1972,6 +2014,123 @@ async fn jump_bottom_reaches_the_last_search_result() {
     state.update(Action::JumpBottom, &fx);
 
     assert_eq!(state.selected, 2);
+}
+
+#[tokio::test]
+async fn reaching_the_search_tail_starts_the_next_page_without_hiding_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.view = View::Search;
+    state.search.input = false;
+    state.search.query = "query".into();
+    let request = state.search.submit().unwrap();
+    assert!(state.search.accept(
+        request.seq,
+        &request.query,
+        request.channel,
+        request.offset,
+        crate::api::SearchPayload::Songs(crate::api::SearchPage {
+            items: vec![row(1), row(2)],
+            total: 31,
+        }),
+    ));
+
+    state.update(Action::MoveSelection(1), &fx);
+
+    assert_eq!(state.selected, 1);
+    assert_eq!(state.search.current_len(), 2);
+    assert!(state.search.current_searching());
+}
+
+#[tokio::test]
+async fn an_empty_filtered_search_page_advances_the_server_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.view = View::Search;
+    state.search.query = "query".into();
+    let request = state.search.submit().unwrap();
+
+    state.update(
+        Action::SearchResults {
+            seq: request.seq,
+            query: request.query,
+            channel: request.channel,
+            offset: request.offset,
+            payload: crate::api::SearchPayload::Songs(crate::api::SearchPage {
+                items: Vec::new(),
+                total: 31,
+            }),
+        },
+        &fx,
+    );
+
+    assert_eq!(state.search.current_len(), 0);
+    assert!(state.search.current_searching());
+}
+
+#[tokio::test]
+async fn filtered_search_results_do_not_load_an_unfiltered_next_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.view = View::Search;
+    state.search.input = false;
+    state.search.query = "query".into();
+    let request = state.search.submit().unwrap();
+    assert!(state.search.accept(
+        request.seq,
+        &request.query,
+        request.channel,
+        request.offset,
+        crate::api::SearchPayload::Songs(crate::api::SearchPage {
+            items: vec![row(1), row(2)],
+            total: 31,
+        }),
+    ));
+    state.filter.query = "Track 2".into();
+
+    state.update(Action::JumpBottom, &fx);
+
+    assert_eq!(state.selected, 0);
+    assert!(!state.search.current_searching());
+}
+
+#[tokio::test]
+async fn next_page_failure_stays_visible_after_leaving_search() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.view = View::Search;
+    state.search.query = "query".into();
+    let first = state.search.submit().unwrap();
+    assert!(state.search.accept(
+        first.seq,
+        &first.query,
+        first.channel,
+        first.offset,
+        crate::api::SearchPayload::Songs(crate::api::SearchPage {
+            items: vec![row(1), row(2)],
+            total: 31,
+        }),
+    ));
+    let next = state.search.load_more().unwrap();
+    state.view = View::Library;
+
+    state.update(
+        Action::SearchFailed {
+            seq: next.seq,
+            query: next.query,
+            channel: next.channel,
+            offset: next.offset,
+            message: "next page failed".into(),
+        },
+        &fx,
+    );
+
+    assert_eq!(state.search.current_len(), 2);
+    assert_eq!(state.status.as_deref(), Some("next page failed"));
 }
 
 #[tokio::test]
@@ -2241,6 +2400,7 @@ async fn a_refresh_cannot_activate_hidden_stale_search_rows() {
         first.seq,
         &first.query,
         first.channel,
+        first.offset,
         crate::api::SearchPayload::Songs(crate::api::SearchPage {
             items: vec![row(1)],
             total: 1,
@@ -3238,8 +3398,8 @@ async fn small_source_covers_are_upscaled_to_fill_the_cover_area() {
             cells: (64, 32),
             style_revision: 0,
             song_id: 1,
-            source_key: "test".into(),
-            source_edge: COVER_SOURCE_EDGE,
+            source_key: "dynamic-upscale-test".into(),
+            source_edge: 2_048,
         },
         style: CoverStyle {
             pixel: AppState::new(&Config::default()).pixel_style(),
@@ -3250,10 +3410,57 @@ async fn small_source_covers_are_upscaled_to_fill_the_cover_area() {
     let processed = process_cover(None, &load, bytes, false).await.unwrap();
     match processed {
         EitherCover::Original(image) => {
-            assert_eq!(image.width().max(image.height()), COVER_SOURCE_EDGE);
+            assert_eq!(image.width().max(image.height()), 2_048);
         }
         EitherCover::Pixel(_) => panic!("original load must decode an image"),
     }
+}
+
+#[tokio::test]
+async fn resize_worker_reports_a_job_panic_instead_of_hiding_it() {
+    let (requests_tx, requests_rx) = mpsc::unbounded_channel();
+    let (responses_tx, mut responses_rx) = mpsc::unbounded_channel();
+    spawn_resize_worker(requests_rx, responses_tx);
+
+    let mut protocol = ThreadProtocol::new(
+        requests_tx,
+        Some(Picker::halfblocks().new_resize_protocol(DynamicImage::new_rgba8(4, 4))),
+    );
+    ratatui_image::ResizeEncodeRender::resize_encode(
+        &mut protocol,
+        &ratatui_image::Resize::Fit(None),
+        (0, 0).into(),
+    );
+
+    let response = tokio::time::timeout(Duration::from_secs(1), responses_rx.recv())
+        .await
+        .expect("worker must report the lost protocol")
+        .expect("worker must send its failure");
+    let error = match response {
+        Err(error) => error,
+        Ok(_) => panic!("worker unexpectedly encoded an invalid request"),
+    };
+    assert!(error.contains("panicked"), "{error}");
+}
+
+#[test]
+fn a_dead_cover_encoder_degrades_to_pixel_art_instead_of_ending_the_session() {
+    // The queue keeps playing: a lost encoder costs the artwork, not the app.
+    let mut state = AppState::new(&Config::default());
+    let (requests_tx, _requests_rx) = mpsc::unbounded_channel();
+    state.original_cover = Some(OriginalCover::new(Picker::halfblocks(), requests_tx));
+
+    degrade_original_covers(&mut state, &anyhow::anyhow!("cover resize worker panicked"));
+
+    assert!(state.original_cover.is_none());
+    assert!(state.selected_original_cover.is_none());
+    assert!(state.bar_original_cover.is_none());
+    assert!(state.command_feedback_error);
+    let feedback = state
+        .command_feedback
+        .as_deref()
+        .expect("a visible failure");
+    assert!(feedback.contains("panicked"), "{feedback}");
 }
 
 #[tokio::test]

@@ -16,6 +16,11 @@ use crate::media::AudioCodec;
 
 const PLAYLIST_PAGE_SIZE: usize = 500;
 
+struct PlaylistPage {
+    rows: Vec<SongRow>,
+    raw_count: usize,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NcmClientError {
     #[error(transparent)]
@@ -393,18 +398,19 @@ impl NcmClient {
         playlist_id: i64,
         session: Option<&Session>,
         offset: usize,
-    ) -> Result<Vec<SongRow>, NcmClientError> {
+    ) -> Result<PlaylistPage, NcmClientError> {
         let query = Self::query_with_session(session)
             .param("id", &playlist_id.to_string())
             .param("limit", &PLAYLIST_PAGE_SIZE.to_string())
             .param("offset", &offset.to_string());
         let response = self.client.playlist_track_all(&query).await?;
         require_success(&response.body)?;
-        response_array(&response.body, &["songs"])?;
-        Ok(song_hits_from(&response.body["songs"])
+        let raw_count = response_array(&response.body, &["songs"])?.len();
+        let rows = song_hits_from(&response.body["songs"])
             .into_iter()
             .map(song_row_from_hit)
-            .collect())
+            .collect();
+        Ok(PlaylistPage { rows, raw_count })
     }
 
     pub async fn set_like(
@@ -602,13 +608,15 @@ fn parse_account(body: &Value) -> Option<(i64, String)> {
 async fn collect_playlist_pages<F, Fut>(mut fetch: F) -> Result<Vec<SongRow>, NcmClientError>
 where
     F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<SongRow>, NcmClientError>>,
+    Fut: std::future::Future<Output = Result<PlaylistPage, NcmClientError>>,
 {
     let mut rows = Vec::new();
+    let mut offset = 0;
     loop {
-        let page = fetch(rows.len()).await?;
-        let complete = page.len() < PLAYLIST_PAGE_SIZE;
-        rows.extend(page);
+        let page = fetch(offset).await?;
+        let complete = page.raw_count < PLAYLIST_PAGE_SIZE;
+        offset += page.raw_count;
+        rows.extend(page.rows);
         if complete {
             return Ok(rows);
         }
@@ -1085,10 +1093,19 @@ pub async fn liked_ids_with(
     let query = query.param("uid", &uid.to_string());
     let response = client.likelist(&query).await?;
     note_rotated_cookies(&response.cookie);
-    Ok(response_array(&response.body, &["ids"])?
+    liked_ids_from_body(&response.body)
+}
+
+fn liked_ids_from_body(body: &Value) -> Result<Vec<i64>, NcmClientError> {
+    response_array(body, &["ids"])?
         .iter()
-        .filter_map(Value::as_i64)
-        .collect())
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_i64()
+                .ok_or_else(|| invalid_payload(&format!("$.ids[{index}]")))
+        })
+        .collect()
 }
 
 pub async fn set_like_with(
@@ -2256,13 +2273,28 @@ mod tests {
 
     #[tokio::test]
     async fn playlist_paging_keeps_all_rows_in_order() {
-        let pages = [rows(0..500), rows(500..1000), Vec::new()];
+        let pages = [
+            PlaylistPage {
+                rows: rows(0..500),
+                raw_count: 500,
+            },
+            PlaylistPage {
+                rows: rows(500..1000),
+                raw_count: 500,
+            },
+            PlaylistPage {
+                rows: Vec::new(),
+                raw_count: 0,
+            },
+        ];
         let mut calls = Vec::new();
 
         let result = collect_playlist_pages(|offset| {
             calls.push(offset);
-            let page = pages[calls.len() - 1].clone();
-            async move { Ok(page) }
+            let page = &pages[calls.len() - 1];
+            let rows = page.rows.clone();
+            let raw_count = page.raw_count;
+            async move { Ok(PlaylistPage { rows, raw_count }) }
         })
         .await
         .unwrap();
@@ -2277,13 +2309,24 @@ mod tests {
 
     #[tokio::test]
     async fn playlist_paging_fetches_the_partial_second_page() {
-        let pages = [rows(0..500), rows(500..501)];
+        let pages = [
+            PlaylistPage {
+                rows: rows(0..500),
+                raw_count: 500,
+            },
+            PlaylistPage {
+                rows: rows(500..501),
+                raw_count: 1,
+            },
+        ];
         let mut calls = Vec::new();
 
         let result = collect_playlist_pages(|offset| {
             calls.push(offset);
-            let page = pages[calls.len() - 1].clone();
-            async move { Ok(page) }
+            let page = &pages[calls.len() - 1];
+            let rows = page.rows.clone();
+            let raw_count = page.raw_count;
+            async move { Ok(PlaylistPage { rows, raw_count }) }
         })
         .await
         .unwrap();
@@ -2291,6 +2334,49 @@ mod tests {
         assert_eq!(calls, vec![0, 500]);
         assert_eq!(result.len(), 501);
         assert_eq!(result[500].id, 500);
+    }
+
+    #[tokio::test]
+    async fn playlist_paging_uses_raw_count_after_dropping_an_invalid_row() {
+        let pages = [
+            PlaylistPage {
+                rows: rows(0..499),
+                raw_count: 500,
+            },
+            PlaylistPage {
+                rows: rows(500..501),
+                raw_count: 1,
+            },
+        ];
+        let mut calls = Vec::new();
+
+        let result = collect_playlist_pages(|offset| {
+            calls.push(offset);
+            let page = &pages[calls.len() - 1];
+            let rows = page.rows.clone();
+            let raw_count = page.raw_count;
+            async move { Ok(PlaylistPage { rows, raw_count }) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(calls, vec![0, 500]);
+        assert_eq!(result.len(), 500);
+        assert_eq!(result.last().unwrap().id, 500);
+    }
+
+    #[test]
+    fn liked_ids_rejects_an_invalid_member_instead_of_returning_a_partial_set() {
+        let body = serde_json::json!({ "code": 200, "ids": [3, "broken", 1] });
+
+        assert!(matches!(
+            liked_ids_from_body(&body),
+            Err(NcmClientError::InvalidPayload(path)) if path == "$.ids[1]"
+        ));
+        assert_eq!(
+            liked_ids_from_body(&serde_json::json!({ "code": 200, "ids": [3, 1, 2] })).unwrap(),
+            [3, 1, 2]
+        );
     }
 
     #[tokio::test]

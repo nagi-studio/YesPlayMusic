@@ -13,9 +13,10 @@ pub enum Lang {
 impl Lang {
     pub fn from_config(value: &str) -> Self {
         match value {
+            "zh" => Self::Zh,
             "en" => Self::En,
             "ja" => Self::Ja,
-            _ => Self::Zh,
+            _ => unreachable!("language was validated before initialization: {value}"),
         }
     }
 }
@@ -46,6 +47,7 @@ pub enum Key {
     SettingLanguage,
     SettingQuality,
     SettingCoverMode,
+    SettingCoverSize,
     SettingCoverPalette,
     SettingCoverDetail,
     SettingLayout,
@@ -153,6 +155,7 @@ pub enum Key {
     FmStarting,
     FmTrashed,
     SettingUpdateCheck,
+    SettingIntroAnimation,
     LabelLike,
     LabelHelp,
     Searching,
@@ -523,6 +526,14 @@ pub fn t_update_download_failed(url: &str) -> String {
     }
 }
 
+pub fn t_cover_encoder_failed(error: &str) -> String {
+    match language() {
+        Lang::Zh => format!("封面渲染失败，已切换到像素封面：{error}"),
+        Lang::En => format!("Cover rendering failed, falling back to pixel art: {error}"),
+        Lang::Ja => format!("カバー描画に失敗、ピクセル表示に切り替えます：{error}"),
+    }
+}
+
 pub fn t_update_no_prebuilt() -> &'static str {
     match language() {
         Lang::Zh => "此平台没有预构建的 ypm，可从源码 cargo build",
@@ -631,6 +642,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLanguage => "语言",
             Key::SettingQuality => "音质",
             Key::SettingCoverMode => "封面模式",
+            Key::SettingCoverSize => "封面大小",
             Key::SettingCoverPalette => "封面配色",
             Key::SettingCoverDetail => "封面分块",
             Key::SettingLayout => "播放布局",
@@ -734,6 +746,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::FmStarting => "正在获取私人 FM…",
             Key::FmTrashed => "已加入垃圾桶，不再播放",
             Key::SettingUpdateCheck => "更新检测",
+            Key::SettingIntroAnimation => "启动动画",
             Key::LabelLike => "收藏",
             Key::LabelHelp => "全部键位",
             Key::Searching => "搜索中…",
@@ -807,6 +820,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLanguage => "Language",
             Key::SettingQuality => "Audio quality",
             Key::SettingCoverMode => "Cover mode",
+            Key::SettingCoverSize => "Cover size",
             Key::SettingCoverPalette => "Cover palette",
             Key::SettingCoverDetail => "Cover blocks",
             Key::SettingLayout => "Player layout",
@@ -912,6 +926,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::FmStarting => "Loading Personal FM…",
             Key::FmTrashed => "Moved to the FM trash, never playing again",
             Key::SettingUpdateCheck => "Update check",
+            Key::SettingIntroAnimation => "Startup animation",
             Key::LabelLike => "Like",
             Key::LabelHelp => "All keys",
             Key::Searching => "Searching…",
@@ -985,6 +1000,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLanguage => "言語",
             Key::SettingQuality => "音質",
             Key::SettingCoverMode => "カバーモード",
+            Key::SettingCoverSize => "カバーサイズ",
             Key::SettingCoverPalette => "カバー配色",
             Key::SettingCoverDetail => "カバー分割",
             Key::SettingLayout => "再生レイアウト",
@@ -1090,6 +1106,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::FmStarting => "パーソナル FM を取得中…",
             Key::FmTrashed => "ゴミ箱に入れました。二度と再生しません",
             Key::SettingUpdateCheck => "更新チェック",
+            Key::SettingIntroAnimation => "起動アニメーション",
             Key::LabelLike => "お気に入り",
             Key::LabelHelp => "すべてのキー",
             Key::Searching => "検索中…",
@@ -1225,11 +1242,16 @@ mod tests {
     }
 
     #[test]
-    fn language_config_falls_back_to_chinese() {
+    fn supported_config_languages_map_exactly() {
         assert_eq!(Lang::from_config("zh"), Lang::Zh);
         assert_eq!(Lang::from_config("en"), Lang::En);
         assert_eq!(Lang::from_config("ja"), Lang::Ja);
-        assert_eq!(Lang::from_config("fr"), Lang::Zh);
+    }
+
+    #[test]
+    #[should_panic(expected = "language was validated")]
+    fn invalid_config_language_is_not_silently_normalized() {
+        Lang::from_config("fr");
     }
 
     #[test]

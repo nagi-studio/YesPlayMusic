@@ -1,7 +1,7 @@
 use yesplaymusic_core::cache::AudioQuality;
 
 use crate::action::{Action, View};
-use crate::config::{Config, CoverMode, IconStyle};
+use crate::config::{Config, CoverMode, CoverSize, IconStyle};
 use crate::i18n::{self, Key};
 use crate::nerd_font::{self, Status as NerdFontStatus};
 use crate::pixel::{CoverDetail, CoverPalette};
@@ -17,6 +17,7 @@ pub(crate) enum SettingField {
     Language,
     Quality,
     CoverMode,
+    CoverSize,
     CoverPalette,
     CoverDetail,
     Layout,
@@ -37,15 +38,17 @@ pub(crate) enum SettingField {
     SpectrumSensitivity,
     SpectrumStereo,
     UpdateCheck,
+    IntroAnimation,
 }
 
 impl SettingField {
-    pub(crate) const ALL: [Self; 25] = [
+    pub(crate) const ALL: [Self; 27] = [
         Self::Theme,
         Self::ThemeMode,
         Self::Language,
         Self::Quality,
         Self::CoverMode,
+        Self::CoverSize,
         Self::CoverPalette,
         Self::CoverDetail,
         Self::Layout,
@@ -66,6 +69,7 @@ impl SettingField {
         Self::SpectrumSensitivity,
         Self::SpectrumStereo,
         Self::UpdateCheck,
+        Self::IntroAnimation,
     ];
 
     pub(crate) const fn label(self) -> Key {
@@ -75,6 +79,7 @@ impl SettingField {
             Self::Language => Key::SettingLanguage,
             Self::Quality => Key::SettingQuality,
             Self::CoverMode => Key::SettingCoverMode,
+            Self::CoverSize => Key::SettingCoverSize,
             Self::CoverPalette => Key::SettingCoverPalette,
             Self::CoverDetail => Key::SettingCoverDetail,
             Self::Layout => Key::SettingLayout,
@@ -95,6 +100,7 @@ impl SettingField {
             Self::SpectrumSensitivity => Key::SettingSpectrumSensitivity,
             Self::SpectrumStereo => Key::SettingSpectrumStereo,
             Self::UpdateCheck => Key::SettingUpdateCheck,
+            Self::IntroAnimation => Key::SettingIntroAnimation,
         }
     }
 }
@@ -248,6 +254,9 @@ impl AppState {
                 const VALUES: &[CoverMode] = &[CoverMode::Pixel, CoverMode::Original];
                 self.config.cover_mode = cycle(VALUES, &self.config.cover_mode, delta);
             }
+            SettingField::CoverSize => {
+                self.config.cover_size = cycle(&CoverSize::ALL, &self.config.cover_size, delta);
+            }
             SettingField::CoverPalette => {
                 const VALUES: &[CoverPalette] = &[CoverPalette::Original, CoverPalette::Theme];
                 self.config.cover_palette = cycle(VALUES, &self.config.cover_palette, delta);
@@ -328,6 +337,9 @@ impl AppState {
             }
             SettingField::UpdateCheck => {
                 self.config.update_check = !self.config.update_check;
+            }
+            SettingField::IntroAnimation => {
+                self.config.intro_animation = !self.config.intro_animation;
             }
             SettingField::QueueBehavior => {
                 self.config.enter_replaces_queue = !self.config.enter_replaces_queue;
@@ -413,6 +425,12 @@ impl AppState {
                 // terminal genuinely lacks a graphics protocol.
                 CoverMode::Original => "Original (unsupported)".to_owned(),
             },
+            SettingField::CoverSize => match self.config.cover_size {
+                CoverSize::Compact => "Compact",
+                CoverSize::Auto => "Auto",
+                CoverSize::Large => "Large",
+            }
+            .to_owned(),
             SettingField::CoverPalette => match self.config.cover_palette {
                 CoverPalette::Original => "Original",
                 CoverPalette::Theme => "Theme",
@@ -423,8 +441,9 @@ impl AppState {
             }
             SettingField::CoverDetail => self.config.cover_detail.as_str().to_owned(),
             SettingField::Layout => match self.config.layout.as_str() {
+                "side" => "Side",
                 "stacked" => "Stacked",
-                _ => "Side",
+                value => unreachable!("layout was validated before opening settings: {value}"),
             }
             .to_owned(),
             SettingField::LyricRows => match self.config.lyric_rows {
@@ -432,8 +451,11 @@ impl AppState {
                 None => format!("auto ({})", i18n::t(Key::SettingDefaultTag)),
             },
             SettingField::ProgressStyle => match self.config.progress_style.as_str() {
+                "dot" => "Dot",
                 "bar" => "Bar",
-                _ => "Dot",
+                value => {
+                    unreachable!("progress style was validated before opening settings: {value}")
+                }
             }
             .to_owned(),
             SettingField::PixelDetail => format!("{:.1}×", self.config.pixel_scale),
@@ -458,6 +480,7 @@ impl AppState {
             }
             SettingField::SpectrumStereo => self.on_off(self.config.spectrum_stereo),
             SettingField::UpdateCheck => self.on_off(self.config.update_check),
+            SettingField::IntroAnimation => self.on_off(self.config.intro_animation),
             SettingField::QueueBehavior => if self.config.enter_replaces_queue {
                 i18n::t(Key::SettingQueueList)
             } else {
@@ -547,6 +570,7 @@ impl AppState {
         // bottom band; in the side layout it lives in the right panel, so
         // toggling it must not reload the cover (visible vinyl flash).
         let layout_changed = before.layout != self.config.layout
+            || before.cover_size != self.config.cover_size
             || (before.spectrum_enabled != self.config.spectrum_enabled
                 && self.layout == PlayLayout::Stacked);
 
@@ -563,8 +587,8 @@ impl AppState {
             i18n::set_language(i18n::Lang::from_config(&self.config.language));
         }
         self.layout = PlayLayout::from_config(&self.config.layout);
-        self.thick_progress = self.config.progress_style == "bar";
-        self.pixel_detail_scale = self.config.pixel_scale.clamp(0.5, 4.0);
+        self.thick_progress = super::thick_progress_from_config(&self.config.progress_style);
+        self.pixel_detail_scale = self.config.pixel_scale;
         self.enter_replaces_queue = self.config.enter_replaces_queue;
         if before.quality != self.config.quality {
             fx.ncm.set_quality(self.config.quality);

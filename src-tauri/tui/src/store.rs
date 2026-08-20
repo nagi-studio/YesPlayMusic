@@ -104,6 +104,33 @@ struct ProfileSnapshot {
     profile: StoredProfile,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ProfileLoadError {
+    #[error("failed to read stored profile at {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("stored profile at {} is invalid: {source}", path.display())]
+    Decode {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "stored profile at {} uses unsupported version {found}",
+        path.display()
+    )]
+    UnsupportedVersion { path: PathBuf, found: u32 },
+    #[error("failed to scan legacy library snapshots at {}: {source}", path.display())]
+    LegacyScan {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
 impl LibraryStore {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -158,22 +185,49 @@ impl LibraryStore {
         Ok(())
     }
 
-    pub fn load_profile(&self) -> Option<StoredProfile> {
-        let stored = fs::read(self.root.join("profile.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<ProfileSnapshot>(&bytes).ok())
-            .filter(|snapshot| snapshot.version == SNAPSHOT_VERSION)
-            .map(|snapshot| snapshot.profile);
-        stored.or_else(|| self.profile_from_snapshots())
+    pub fn load_profile(&self) -> Result<Option<StoredProfile>, ProfileLoadError> {
+        let path = self.root.join("profile.json");
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return self.profile_from_snapshots();
+            }
+            Err(source) => return Err(ProfileLoadError::Read { path, source }),
+        };
+        let snapshot: ProfileSnapshot =
+            serde_json::from_slice(&bytes).map_err(|source| ProfileLoadError::Decode {
+                path: path.clone(),
+                source,
+            })?;
+        if snapshot.version != SNAPSHOT_VERSION {
+            return Err(ProfileLoadError::UnsupportedVersion {
+                path,
+                found: snapshot.version,
+            });
+        }
+        Ok(Some(snapshot.profile))
     }
 
     /// Pre-profile installs already have per-uid library snapshots. Adopt the
     /// most recently synced uid so the first offline start after an upgrade
     /// still reaches the local library.
-    fn profile_from_snapshots(&self) -> Option<StoredProfile> {
-        let entries = fs::read_dir(&self.root).ok()?;
+    fn profile_from_snapshots(&self) -> Result<Option<StoredProfile>, ProfileLoadError> {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(ProfileLoadError::LegacyScan {
+                    path: self.root.clone(),
+                    source,
+                });
+            }
+        };
         let mut best: Option<(SystemTime, i64)> = None;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|source| ProfileLoadError::LegacyScan {
+                path: self.root.clone(),
+                source,
+            })?;
             let name = entry.file_name();
             let Some(uid) = name
                 .to_str()
@@ -185,15 +239,18 @@ impl LibraryStore {
             let modified = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
-                .unwrap_or(UNIX_EPOCH);
+                .map_err(|source| ProfileLoadError::LegacyScan {
+                    path: entry.path(),
+                    source,
+                })?;
             if best.is_none_or(|(freshest, _)| modified > freshest) {
                 best = Some((modified, uid));
             }
         }
-        best.map(|(_, uid)| StoredProfile {
+        Ok(best.map(|(_, uid)| StoredProfile {
             uid,
             nickname: String::new(),
-        })
+        }))
     }
 
     pub fn save_profile(&self, profile: &StoredProfile) -> io::Result<()> {
@@ -254,7 +311,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{LibraryStore, StoredPlayback, StoredProfile, StoredSong};
+    use super::{
+        LibraryStore, ProfileLoadError, ProfileSnapshot, StoredPlayback, StoredProfile, StoredSong,
+        SNAPSHOT_VERSION,
+    };
     use crate::api::{SongRow, Source};
     use crate::app::PlayMode;
 
@@ -413,7 +473,7 @@ mod tests {
         store.save_profile(&first).unwrap();
         store.save_profile(&second).unwrap();
 
-        assert_eq!(store.load_profile(), Some(second));
+        assert_eq!(store.load_profile().unwrap(), Some(second));
     }
 
     #[test]
@@ -424,7 +484,7 @@ mod tests {
         store.save(33, "daily", &[song(2)]).unwrap();
 
         assert_eq!(
-            store.load_profile(),
+            store.load_profile().unwrap(),
             Some(StoredProfile {
                 uid: 21,
                 nickname: String::new(),
@@ -444,17 +504,62 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(store.load_profile().map(|profile| profile.uid), Some(9));
+        assert_eq!(
+            store.load_profile().unwrap().map(|profile| profile.uid),
+            Some(9)
+        );
     }
 
     #[test]
-    fn damaged_profile_reads_as_absent() {
+    fn damaged_profile_is_not_replaced_by_a_legacy_snapshot() {
         let directory = tempdir().unwrap();
         let root = directory.path().join("library");
         fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("21-liked.json"), b"legacy marker").unwrap();
         fs::write(root.join("profile.json"), b"{broken").unwrap();
 
-        assert_eq!(LibraryStore::new(root).load_profile(), None);
+        assert!(matches!(
+            LibraryStore::new(root).load_profile(),
+            Err(ProfileLoadError::Decode { .. })
+        ));
+    }
+
+    #[test]
+    fn unsupported_profile_version_is_an_error() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("library");
+        fs::create_dir_all(&root).unwrap();
+        let snapshot = ProfileSnapshot {
+            version: SNAPSHOT_VERSION + 1,
+            saved_at_unix: 1,
+            profile: StoredProfile {
+                uid: 7,
+                nickname: "future".into(),
+            },
+        };
+        fs::write(
+            root.join("profile.json"),
+            serde_json::to_vec(&snapshot).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            LibraryStore::new(root).load_profile(),
+            Err(ProfileLoadError::UnsupportedVersion { found, .. })
+                if found == SNAPSHOT_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn profile_read_errors_are_not_treated_as_missing() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("library");
+        fs::create_dir_all(root.join("profile.json")).unwrap();
+
+        assert!(matches!(
+            LibraryStore::new(root).load_profile(),
+            Err(ProfileLoadError::Read { .. })
+        ));
     }
 
     #[test]

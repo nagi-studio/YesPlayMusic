@@ -154,20 +154,12 @@ jobs:
         if: github.ref_type != 'tag'
         run: bun run build:tauri
 
-      - name: Build locally signed Tauri app with updater artifacts
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED != 'true'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
-        run: bun run build:tauri:macos:updater
-
       - name: Package local DMG
-        if: github.ref_type != 'tag' || vars.APPLE_SIGNING_ENABLED != 'true'
+        if: github.ref_type != 'tag'
         run: bun run package:tauri:dmg
 
       - name: Verify Apple release secrets
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -179,7 +171,7 @@ jobs:
         run: bun run verify:tauri:release-env
 
       - name: Import Developer ID certificate
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -197,7 +189,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
       - name: Build Developer ID signed and notarized DMG
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -214,7 +206,7 @@ jobs:
       # an unstapled DMG still shows "Apple cannot check it for malicious
       # software" no matter how thoroughly the app inside is notarized.
       - name: Notarize and staple the DMG
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -229,7 +221,7 @@ jobs:
           xcrun stapler staple "$DMG"
 
       - name: Validate Developer ID signature and notarization ticket
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         run: |
           APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/YesPlayMusic.app"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -238,7 +230,7 @@ jobs:
           xcrun stapler validate src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Collect notarized release DMG
-        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: github.ref_type == 'tag'
         run: bun run collect:tauri:release-dmg
 
       - name: Smoke packaged macOS runtime
@@ -279,7 +271,7 @@ jobs:
           retention-days: 7
 
       - name: Remove temporary signing keychain
-        if: always() && github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        if: always() && github.ref_type == 'tag'
         run: |
           security delete-keychain "$RUNNER_TEMP/yesplaymusic-build.keychain-db" || true
           rm -f "$RUNNER_TEMP/yesplaymusic-certificate.p12"

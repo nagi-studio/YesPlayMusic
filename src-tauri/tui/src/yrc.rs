@@ -24,7 +24,7 @@ impl YrcLine {
 
 /// Parse YRC's common `[line_start,line_duration](word_start,word_duration,0)word`
 /// form and the `(word,word_start,word_duration)` form used by some providers.
-/// Malformed metadata and tokens are ignored without discarding neighbouring words.
+/// Malformed metadata lines are ignored without discarding neighbouring words.
 pub fn parse_yrc(input: &str) -> Vec<YrcLine> {
     let mut lines = input.lines().filter_map(parse_line).collect::<Vec<_>>();
     lines.sort_by_key(|line| line.start);
@@ -65,7 +65,7 @@ fn parse_words(input: &str) -> Vec<YrcWord> {
         match tag.kind {
             WordTag::TimingFirst { start, duration } => {
                 let word_end = next_tag(input, tag.close).map_or(input.len(), |next| next.open);
-                let text = strip_malformed_tags(&input[tag.close..word_end]);
+                let text = input[tag.close..word_end].to_owned();
                 if !text.is_empty() {
                     words.push(YrcWord {
                         text,
@@ -81,7 +81,7 @@ fn parse_words(input: &str) -> Vec<YrcWord> {
                 duration,
             } => {
                 let next_open = next_tag(input, tag.close).map_or(input.len(), |next| next.open);
-                let separator = strip_malformed_tags(&input[tag.close..next_open]);
+                let separator = &input[tag.close..next_open];
                 let text = format!("{text}{separator}");
                 if !text.is_empty() {
                     words.push(word(&text, start, duration));
@@ -91,34 +91,6 @@ fn parse_words(input: &str) -> Vec<YrcWord> {
         }
     }
     words
-}
-
-fn strip_malformed_tags(text: &str) -> String {
-    let mut cleaned = String::with_capacity(text.len());
-    let mut remaining = text;
-    while let Some(open) = remaining.find('(') {
-        cleaned.push_str(&remaining[..open]);
-        let Some(relative_close) = remaining[open + 1..].find(')') else {
-            cleaned.push_str(&remaining[open..]);
-            return cleaned;
-        };
-        let close = open + 1 + relative_close;
-        let contents = &remaining[open + 1..close];
-        if !looks_like_timing_tag(contents) {
-            cleaned.push_str(&remaining[open..=close]);
-        }
-        remaining = &remaining[close + 1..];
-    }
-    cleaned.push_str(remaining);
-    cleaned
-}
-
-fn looks_like_timing_tag(contents: &str) -> bool {
-    let fields = contents.split(',').map(str::trim).collect::<Vec<_>>();
-    matches!(fields.len(), 2 | 3)
-        && fields
-            .iter()
-            .any(|field| parse_milliseconds(field).is_some())
 }
 
 fn word(text: &str, start: u64, duration: u64) -> YrcWord {
@@ -259,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_metadata_bad_lines_and_bad_tokens_without_losing_valid_neighbours() {
+    fn skips_bad_metadata_lines_but_preserves_unknown_tokens_as_text() {
         let lines = parse_yrc(
             r#"
 {"t":0,"c":[{"tx":"作词"}]}
@@ -271,8 +243,7 @@ mod tests {
         );
 
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].text(), "保留(bad timing)括号也保留尾");
-        assert!(!lines[0].text().contains("1500,nope"));
+        assert_eq!(lines[0].text(), "保留(bad timing)括号也保留(1500,nope,0)尾");
         assert_eq!(lines[0].words.len(), 2);
         assert_eq!(lines[1].text(), "前(broken)后");
         assert_eq!(lines[1].words.len(), 2);
@@ -280,9 +251,13 @@ mod tests {
 
     #[test]
     fn preserves_ascii_parentheses_that_are_lyric_text() {
-        let lines = parse_yrc("[0,1000](0,1000,0)Hello (world) (feat. A,B)");
+        let lines =
+            parse_yrc("[0,1000](0,1000,0)Hello (world) (feat. A,B) (2024, Remix) (Verse 2, 2024)");
 
-        assert_eq!(lines[0].text(), "Hello (world) (feat. A,B)");
+        assert_eq!(
+            lines[0].text(),
+            "Hello (world) (feat. A,B) (2024, Remix) (Verse 2, 2024)"
+        );
     }
 
     #[test]

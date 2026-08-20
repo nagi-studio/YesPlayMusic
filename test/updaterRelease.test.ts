@@ -122,10 +122,11 @@ test('desktop builds use the official Tauri updater and process plugins', () => 
   );
 });
 
-test('tag CI signs all updater targets and publishes latest.json', () => {
+test('tag CI signs all updater targets through the gated release paths', () => {
   expect(workflow).toContain('secrets.TAURI_SIGNING_PRIVATE_KEY');
   expect(workflow).toContain('vars.TAURI_UPDATER_PUBKEY');
-  expect(workflow).toContain('build:tauri:macos:updater');
+  expect(workflow).toContain('build:tauri:release');
+  expect(workflow).not.toContain('build:tauri:macos:updater');
   expect(workflow).toContain('build:tauri:windows:updater');
   expect(workflow).toContain('build:tauri:linux:updater');
   expect(workflow).toContain('verify-macos-updater.mjs');

@@ -44,7 +44,7 @@ test('CI 官方 Actions 使用 Node.js 24 运行时版本', () => {
   }
 });
 
-test('macOS CI 保留无签名和签名两条发布路径', () => {
+test('macOS CI 保留非 tag 本地路径和 tag Developer ID 发布路径', () => {
   expect(workflow).toContain('targets: aarch64-apple-darwin');
   expect(workflow).toContain('run: bun run build:tauri');
   expect(workflow).toContain('run: bun run package:tauri:dmg');
@@ -224,14 +224,29 @@ test('三平台干净 runner 在 Rust 测试前先生成 Tauri 资源', () => {
   }
 });
 
-test('版本 tag 默认走无 Developer ID 签名路径', () => {
-  expect(workflow).toContain("vars.APPLE_SIGNING_ENABLED != 'true'");
-  expect(workflow).toContain('run: bun run build:tauri');
-  expect(workflow).toContain('run: bun run package:tauri:dmg');
-});
-
-test('显式开启 Apple 签名后才要求公证和 stapler 验证', () => {
-  expect(workflow).toContain("vars.APPLE_SIGNING_ENABLED == 'true'");
+test('版本 tag 必须走 Developer ID 签名、公证和 stapler 验证', () => {
+  expect(workflow).not.toContain('vars.APPLE_SIGNING_ENABLED');
+  expect(workflow).not.toContain(
+    'name: Build locally signed Tauri app with updater artifacts'
+  );
+  expect(workflow).toContain(
+    "name: Build locally signed Tauri app\n        if: github.ref_type != 'tag'"
+  );
+  expect(workflow).toContain(
+    "name: Package local DMG\n        if: github.ref_type != 'tag'"
+  );
+  for (const step of [
+    'Verify Apple release secrets',
+    'Import Developer ID certificate',
+    'Build Developer ID signed and notarized DMG',
+    'Notarize and staple the DMG',
+    'Validate Developer ID signature and notarization ticket',
+    'Collect notarized release DMG',
+  ]) {
+    expect(workflow).toContain(
+      `name: ${step}\n        if: github.ref_type == 'tag'`
+    );
+  }
   for (const secret of [
     'APPLE_CERTIFICATE',
     'APPLE_CERTIFICATE_PASSWORD',
