@@ -262,15 +262,16 @@ fn swap_in(target: &Path, binary: &[u8]) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        replace_windows(target, staged)?;
-        return Ok(());
+        replace_windows(target, staged)
     }
     #[cfg(not(windows))]
-    staged
-        .persist(target)
-        .map(|_| ())
-        .map_err(|error| error.error)
-        .with_context(|| format!("替换 {} 失败", target.display()))
+    {
+        staged
+            .persist(target)
+            .map(|_| ())
+            .map_err(|error| error.error)
+            .with_context(|| format!("替换 {} 失败", target.display()))
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -289,7 +290,11 @@ fn rollback_windows_replace(
     }
 }
 
-#[cfg(windows)]
+/// Built everywhere under `cfg(test)` on purpose: the body is plain `std::fs`,
+/// and a `cfg(windows)`-only helper is invisible to clippy and the test suite
+/// on every other platform. v0.9.3 shipped a `needless_return` here that six
+/// green local gates could not see.
+#[cfg(any(windows, test))]
 fn replace_windows(target: &Path, staged: tempfile::NamedTempFile) -> Result<()> {
     let parked = target.with_extension("old.exe");
     match std::fs::remove_file(&parked) {
@@ -309,6 +314,23 @@ fn replace_windows(target: &Path, staged: tempfile::NamedTempFile) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_windows_swap_parks_the_old_binary_before_installing_the_new_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("ypm.exe");
+        std::fs::write(&target, b"old").unwrap();
+        let mut staged = tempfile::Builder::new()
+            .tempfile_in(directory.path())
+            .unwrap();
+        std::io::Write::write_all(&mut staged, b"new").unwrap();
+
+        replace_windows(&target, staged).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        let parked = target.with_extension("old.exe");
+        assert_eq!(std::fs::read(parked).unwrap(), b"old");
+    }
 
     #[test]
     #[cfg(unix)]
