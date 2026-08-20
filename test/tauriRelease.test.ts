@@ -245,6 +245,12 @@ test('显式开启 Apple 签名后才要求公证和 stapler 验证', () => {
   }
   expect(workflow).toContain('xcrun stapler validate');
   expect(workflow).toContain('spctl --assess --type execute');
+  // Tauri only notarizes the .app; the DMG is the file that carries
+  // quarantine, so it needs its own submission and its own staple. v0.9.2's
+  // second attempt failed on exactly this — the app validated clean and the
+  // DMG reported "does not have a ticket stapled to it".
+  expect(workflow).toContain('xcrun notarytool submit');
+  expect(workflow).toContain('xcrun stapler staple');
   expect(packageJson.scripts['build:tauri:release']).toContain(
     '--developer-id'
   );

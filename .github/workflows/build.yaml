@@ -208,6 +208,26 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
         run: bun run build:tauri:release
 
+      # Tauri notarizes and staples the .app, then wraps it in a DMG it only
+      # signs. But quarantine lands on the DMG — that is the file the browser
+      # writes — and macOS evaluates the disk image itself on first open, so
+      # an unstapled DMG still shows "Apple cannot check it for malicious
+      # software" no matter how thoroughly the app inside is notarized.
+      - name: Notarize and staple the DMG
+        if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+
       - name: Validate Developer ID signature and notarization ticket
         if: github.ref_type == 'tag' && vars.APPLE_SIGNING_ENABLED == 'true'
         run: |
