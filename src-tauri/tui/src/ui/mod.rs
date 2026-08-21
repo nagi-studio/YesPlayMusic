@@ -230,6 +230,16 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     hits.settings_cancel.clear();
     hits.idle_art = None;
 
+    // Expire the intro before any view draws. Expiring inside the overlay
+    // is one frame too late: the dashboard has already skipped its idle art
+    // by then, and an overlay that clears-and-returns paints nothing — the
+    // logo blinks out for a frame right at the seamless handover.
+    if let Some(preview) = &state.intro_preview {
+        if preview.started.elapsed() >= preview.seq.total() {
+            state.intro_preview = None;
+        }
+    }
+
     let theme = &state.theme;
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.bg)), area);
@@ -307,14 +317,10 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
 /// no switch, no jump. Without an anchor (settings preview, playing view)
 /// it owns the screen, mirroring the standalone `ypm update` intro.
 fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, anchor: Option<Rect>) {
+    // Expiry is handled at the top of draw(), before the views run.
     let Some(preview) = &state.intro_preview else {
         return;
     };
-    if preview.started.elapsed() >= preview.seq.total() {
-        state.intro_preview = None;
-        return;
-    }
-    let preview = state.intro_preview.as_ref().expect("checked above");
     let seq = &preview.seq;
     let mut remaining = preview.started.elapsed();
     let mut current = seq.frames.last().expect("sequences are never empty");
@@ -844,6 +850,31 @@ mod tests {
     use crate::app::{AppState, NowPlaying};
     use crate::config::Config;
     use crate::i18n::{self, Key};
+
+    #[test]
+    fn an_expired_intro_hands_the_frame_to_the_idle_art_without_a_blank_blink() {
+        let mut state = AppState::new(&Config::default());
+        state.start_intro_preview();
+        let preview = state.intro_preview.as_mut().expect("preview must start");
+        // Backdate the clock so this draw is the first one past the end —
+        // exactly the handover frame that used to blink blank.
+        preview.started = std::time::Instant::now() - preview.seq.total();
+        let backend = TestBackend::new(90, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Hits::default();
+        terminal
+            .draw(|frame| draw(frame, &mut state, &mut hits))
+            .unwrap();
+        assert!(state.intro_preview.is_none(), "the intro has expired");
+        let rect = hits.idle_art.expect("the dashboard laid out its art");
+        let buffer = terminal.backend().buffer();
+        let inked = (rect.y..rect.bottom())
+            .any(|y| (rect.x..rect.right()).any(|x| buffer[(x, y)].symbol() != " "));
+        assert!(
+            inked,
+            "idle art must be drawn on the very frame the intro ends"
+        );
+    }
 
     #[test]
     fn browsing_views_show_the_player_bar_only_while_a_track_is_loaded() {
