@@ -383,6 +383,13 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
                         (None, None) => {}
                     }
                 }
+                crate::logo::ComposedCell::Art { glyph, fg, bg } => {
+                    let paint = |color: Color| match color {
+                        Color::Reset => theme_bg,
+                        other => other,
+                    };
+                    cell.set_char(glyph).set_fg(paint(fg)).set_bg(paint(bg));
+                }
                 crate::logo::ComposedCell::Note { glyph, rgb, under } => {
                     let under = match under {
                         Some((r, g, b)) => Color::Rgb(r, g, b),
@@ -873,6 +880,69 @@ mod tests {
         assert!(
             inked,
             "idle art must be drawn on the very frame the intro ends"
+        );
+    }
+
+    #[test]
+    fn the_last_intro_frame_paints_what_the_dashboard_paints_after_it() {
+        // The handover swaps the overlay for the dashboard's own art widget.
+        // With a cover_detail finer than half blocks the two renderers pick
+        // different glyphs for the same colours, so only comparing the drawn
+        // cells catches a mark that snaps into focus as the intro ends.
+        const LOGO: &[u8] = include_bytes!("../../../../images/logo.png");
+        let config = Config {
+            cover_detail: crate::pixel::CoverDetail::Quad,
+            ..Config::default()
+        };
+        let mut state = AppState::new(&config);
+        state.start_intro_preview();
+        let backend = TestBackend::new(90, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Hits::default();
+
+        // The final frame of the intro, still drawn by the overlay.
+        {
+            let preview = state.intro_preview.as_mut().expect("preview must start");
+            preview.started = std::time::Instant::now() - preview.seq.total()
+                + std::time::Duration::from_millis(1);
+        }
+        terminal
+            .draw(|frame| draw(frame, &mut state, &mut hits))
+            .unwrap();
+        let rect = hits.idle_art.expect("the dashboard laid out its art");
+        let intro: Vec<_> = (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .map(|at| terminal.backend().buffer()[at].clone())
+            .collect();
+
+        // What the dashboard keeps showing: the same logo through the same
+        // renderer, which is what load_idle_art installs once it resolves.
+        let spec = state.intro_mark_spec();
+        // Same cell count as the art already laid out, so the dashboard
+        // keeps the rect it just measured and any clipping stays equal.
+        let cells = (state.idle_art.width, state.idle_art.height);
+        state.idle_art = crate::pixel::from_image_bytes(
+            LOGO,
+            spec.palette_mode,
+            spec.palette,
+            spec.background,
+            cells,
+            spec.detail_scale,
+            spec.detail,
+        )
+        .expect("idle art must render");
+        state.intro_preview = None;
+        terminal
+            .draw(|frame| draw(frame, &mut state, &mut hits))
+            .unwrap();
+        let dashboard: Vec<_> = (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .map(|at| terminal.backend().buffer()[at].clone())
+            .collect();
+
+        assert_eq!(
+            intro, dashboard,
+            "the intro's last frame must already be the dashboard's art"
         );
     }
 

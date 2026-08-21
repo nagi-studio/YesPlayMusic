@@ -17,7 +17,7 @@ use crossterm::event::{Event, KeyEventKind};
 use ratatui::style::Color;
 
 use crate::config::IntroStyle;
-use crate::pixel::{self, CoverDetail, CoverPalette, PixelCover};
+use crate::pixel::{self, CoverDetail, CoverPalette, PixelCell, PixelCover};
 use crate::term::{Style, BOLD, CLEAR_SCREEN, DIM, HIDE_CURSOR, HOME, RESET, SHOW_CURSOR};
 
 /// The shipped mark, so the intro can never drift from the app icon.
@@ -51,6 +51,10 @@ pub(crate) struct MarkSpec {
     /// art with the theme background; the intro must match or the finished
     /// mark lands with a subtly different rim than the art it becomes.
     pub background: Color,
+    /// How the destination surface quantizes a cell. The animation always
+    /// works on half-block sub-pixels, but a settled cell is handed to this
+    /// detail level so the finished mark is the dashboard's art exactly.
+    pub detail: CoverDetail,
 }
 
 impl MarkSpec {
@@ -65,16 +69,18 @@ impl MarkSpec {
             // Reset keeps the icon's transparent margin as the terminal's
             // own background instead of painting a rectangle around it.
             background: Color::Reset,
+            // A bare updater screen has no dashboard to land on.
+            detail: CoverDetail::Half,
         }
     }
 }
 
 #[cfg(test)]
 fn cover() -> Option<PixelCover> {
-    cover_with(&MarkSpec::plain(), COLS, ROWS)
+    cover_with(&MarkSpec::plain(), COLS, ROWS, CoverDetail::Half)
 }
 
-fn cover_with(spec: &MarkSpec, cols: u16, rows: u16) -> Option<PixelCover> {
+fn cover_with(spec: &MarkSpec, cols: u16, rows: u16, detail: CoverDetail) -> Option<PixelCover> {
     pixel::from_image_bytes(
         MARK,
         spec.palette_mode,
@@ -82,9 +88,7 @@ fn cover_with(spec: &MarkSpec, cols: u16, rows: u16) -> Option<PixelCover> {
         spec.background,
         (cols, rows),
         spec.detail_scale,
-        // Half is the only lossless detail level here: one cell carries two
-        // sub-pixels and two colours, so nothing is approximated.
-        CoverDetail::Half,
+        detail,
     )
     .ok()
 }
@@ -93,6 +97,9 @@ fn cover_with(spec: &MarkSpec, cols: u16, rows: u16) -> Option<PixelCover> {
 struct Mark {
     side: usize,
     px: Vec<Option<(u8, u8, u8)>>,
+    /// The finished picture as the destination surface draws it. Settled
+    /// cells render from here, so landing on the dashboard changes nothing.
+    art: PixelCover,
 }
 
 fn mark_pixels(cover: &PixelCover) -> Vec<Option<(u8, u8, u8)>> {
@@ -123,9 +130,14 @@ fn mark_pixels(cover: &PixelCover) -> Vec<Option<(u8, u8, u8)>> {
 
 fn mark(spec: &MarkSpec) -> Option<Mark> {
     let side = spec.side.max(12) & !1;
+    let (cols, rows) = (side as u16, (side / 2) as u16);
     Some(Mark {
         side,
-        px: mark_pixels(&cover_with(spec, side as u16, (side / 2) as u16)?),
+        // Half is the only lossless level for the animation grid: one cell
+        // carries two sub-pixels and two colours, so nothing is approximated
+        // and every style can shade a sub-pixel on its own.
+        px: mark_pixels(&cover_with(spec, cols, rows, CoverDetail::Half)?),
+        art: cover_with(spec, cols, rows, spec.detail)?,
     })
 }
 
@@ -193,6 +205,11 @@ pub(crate) struct IntroSequence {
     /// The mark's square side in sub-pixels, centred in the viewport.
     pub mark_side: usize,
     pub frames: Vec<IntroFrame>,
+    /// The finished picture as the destination surface draws it, and the
+    /// cell it starts at. Cells that already hold their final colours are
+    /// composed from this instead of half blocks.
+    art: PixelCover,
+    art_at: (usize, usize),
 }
 
 impl IntroSequence {
@@ -208,6 +225,12 @@ pub(crate) enum ComposedCell {
         top: Option<(u8, u8, u8)>,
         bottom: Option<(u8, u8, u8)>,
     },
+    /// A settled cell, drawn by the destination's own pixel renderer.
+    Art {
+        glyph: char,
+        fg: Color,
+        bg: Color,
+    },
     Note {
         glyph: char,
         rgb: (u8, u8, u8),
@@ -222,10 +245,14 @@ pub(crate) struct FrameCells<'a> {
     frame: &'a IntroFrame,
     sub_w: usize,
     notes: HashMap<(u16, u16), (char, Rgb8)>,
+    art: &'a PixelCover,
+    art_at: (usize, usize),
+    /// The last frame's grid: a cell matching it here is finished.
+    finished: &'a [Option<Rgb8>],
 }
 
 impl<'a> FrameCells<'a> {
-    pub(crate) fn new(seq: &IntroSequence, frame: &'a IntroFrame) -> Self {
+    pub(crate) fn new(seq: &'a IntroSequence, frame: &'a IntroFrame) -> Self {
         let mut notes = HashMap::new();
         // Later notes draw over earlier ones, matching insertion order.
         for note in &frame.notes {
@@ -235,6 +262,9 @@ impl<'a> FrameCells<'a> {
             frame,
             sub_w: seq.sub_w,
             notes,
+            art: &seq.art,
+            art_at: seq.art_at,
+            finished: seq.frames.last().map_or(&[], |last| last.grid.as_slice()),
         }
     }
 
@@ -251,7 +281,39 @@ impl<'a> FrameCells<'a> {
         if top.is_none() && bottom.is_none() {
             return ComposedCell::Empty;
         }
+        // Hand a finished cell to the renderer the destination surface uses.
+        // Below half blocks that picks a different glyph for the same
+        // colours, and deferring the switch to the handover would snap the
+        // whole mark into sharper focus in a single frame.
+        if let Some(cell) = self.settled(col, row, top, bottom) {
+            return ComposedCell::Art {
+                glyph: cell.glyph,
+                fg: cell.fg,
+                bg: cell.bg,
+            };
+        }
         ComposedCell::Pixels { top, bottom }
+    }
+
+    /// The destination's own cell, once this one holds its final colours.
+    fn settled(
+        &self,
+        col: usize,
+        row: usize,
+        top: Option<Rgb8>,
+        bottom: Option<Rgb8>,
+    ) -> Option<PixelCell> {
+        let upper = row * 2 * self.sub_w + col;
+        if *self.finished.get(upper)? != top || *self.finished.get(upper + self.sub_w)? != bottom {
+            return None;
+        }
+        let art_col = col.checked_sub(self.art_at.0)?;
+        let art_row = row.checked_sub(self.art_at.1)?;
+        let width = usize::from(self.art.width);
+        if art_col >= width || art_row >= usize::from(self.art.height) {
+            return None;
+        }
+        self.art.cells.get(art_row * width + art_col).copied()
     }
 }
 
@@ -319,6 +381,8 @@ fn seq_square(mark: &Mark, frames: Vec<IntroFrame>) -> IntroSequence {
         sub_h: mark.side,
         mark_side: mark.side,
         frames,
+        art: mark.art.clone(),
+        art_at: (0, 0),
     }
 }
 
@@ -665,7 +729,8 @@ fn zoom(mark: &Mark, bg: (u8, u8, u8), spec: &MarkSpec) -> IntroSequence {
         if side >= full_side {
             continue;
         }
-        let Some(small) = cover_with(spec, side as u16, (side / 2) as u16) else {
+        let Some(small) = cover_with(spec, side as u16, (side / 2) as u16, CoverDetail::Half)
+        else {
             continue;
         };
         let px = mark_pixels(&small);
@@ -934,6 +999,10 @@ fn notes(mark: &Mark, bg: (u8, u8, u8), pad_x: usize, pad_y: usize) -> IntroSequ
         sub_h,
         mark_side: sub,
         frames,
+        art: mark.art.clone(),
+        // `pad_y` counts sub-pixels and notes_pads keeps it even, so the
+        // mark starts on a cell boundary rather than straddling one.
+        art_at: (pad_x, pad_y / 2),
     }
 }
 
@@ -1170,6 +1239,11 @@ fn render_ansi(
                         (None, Some(_)) => ('▄', rgb(bottom), Color::Reset),
                         (None, None) => unreachable!("empty cells are ComposedCell::Empty"),
                     };
+                    out.push_str(&colour(style, fg, true));
+                    out.push_str(&colour(style, bg, false));
+                    out.push(glyph);
+                }
+                ComposedCell::Art { glyph, fg, bg } => {
                     out.push_str(&colour(style, fg, true));
                     out.push_str(&colour(style, bg, false));
                     out.push(glyph);
@@ -1416,6 +1490,7 @@ mod tests {
             palette: &[],
             detail_scale: 1.0,
             background: Color::Rgb(bg.0, bg.1, bg.2),
+            detail: CoverDetail::Half,
         };
         let seq = sequence(IntroStyle::Notes, bg, (6, 6), &spec).expect("sequence must build");
         let last = seq.frames.last().expect("at least one frame");
@@ -1437,6 +1512,60 @@ mod tests {
                     idle_px[y * 28 + x],
                     "pixel ({x},{y}) differs from the idle art"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn the_finished_mark_is_the_idle_art_at_every_cover_detail() {
+        // Sub-pixel equality only proves the animation grid is right; what
+        // the terminal shows is the composed cell. The dashboard quantizes
+        // its idle art at the configured detail, so anything finer than half
+        // blocks picks different glyphs for the same colours — composing the
+        // last frame any other way snaps the whole mark into sharper focus
+        // on the frame the intro hands over.
+        let bg = (20u8, 16u8, 19u8);
+        for detail in [
+            CoverDetail::Half,
+            CoverDetail::Quad,
+            CoverDetail::Sextant,
+            CoverDetail::Octant,
+        ] {
+            let spec = MarkSpec {
+                side: 28,
+                palette_mode: CoverPalette::Original,
+                palette: &[],
+                detail_scale: 1.0,
+                background: Color::Rgb(bg.0, bg.1, bg.2),
+                detail,
+            };
+            let seq = sequence(IntroStyle::Notes, bg, (6, 6), &spec).expect("sequence must build");
+            let last = seq.frames.last().expect("at least one frame");
+            let idle = pixel::from_image_bytes(
+                MARK,
+                spec.palette_mode,
+                spec.palette,
+                spec.background,
+                (28, 14),
+                spec.detail_scale,
+                detail,
+            )
+            .expect("idle art must render");
+            let cells = FrameCells::new(&seq, last);
+            for row in 0..14 {
+                for col in 0..28 {
+                    let want = idle.cells[row * 28 + col];
+                    // The notes style pads by (6, 6) sub-pixels: 6 columns
+                    // and 3 cell rows.
+                    match cells.cell(col + 6, row + 3) {
+                        ComposedCell::Art { glyph, fg, bg } => assert_eq!(
+                            (glyph, fg, bg),
+                            (want.glyph, want.fg, want.bg),
+                            "{detail} cell ({col},{row}) differs from the idle art"
+                        ),
+                        _ => panic!("{detail} cell ({col},{row}) never settled onto the idle art"),
+                    }
+                }
             }
         }
     }

@@ -1544,6 +1544,7 @@ impl AppState {
             palette: self.theme.palette,
             detail_scale: self.pixel_detail_scale,
             background: self.theme.bg,
+            detail: self.config.cover_detail,
         }
     }
 
