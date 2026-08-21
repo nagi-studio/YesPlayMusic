@@ -31,6 +31,25 @@ impl AppState {
                 return;
             }
         }
+        // The intro preview is modal like a splash screen: any key or click
+        // dismisses it, background results keep reducing. A resize kills it
+        // too — the sequence was sized for the old geometry.
+        if self.intro_preview.is_some() {
+            match &action {
+                Action::RawKey(_) | Action::Resize { .. } => {
+                    self.intro_preview = None;
+                    if matches!(action, Action::RawKey(_)) {
+                        return;
+                    }
+                }
+                Action::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => {
+                    self.intro_preview = None;
+                    return;
+                }
+                Action::Mouse(_) => return,
+                _ => {}
+            }
+        }
         // The command palette is the topmost input owner. Background async
         // results still reduce normally while keys, paste, and mouse stay modal.
         let action = if self.command_palette.open {

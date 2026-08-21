@@ -1527,12 +1527,61 @@ async fn intro_and_cover_size_settings_cycle_and_persist() {
         .position(|field| *field == super::settings::SettingField::IntroAnimation)
         .unwrap();
     state.update(Action::AdjustSetting(1), &fx);
-    assert!(!state.config.intro_animation);
+    // Cycling from the default (notes) lands on the next style and starts
+    // the full-screen preview immediately.
+    assert_eq!(
+        state.config.intro_animation,
+        crate::config::IntroStyle::Spectrum
+    );
+    assert!(state.intro_preview.is_some());
+    // Any key dismisses the preview without touching the settings page.
+    state.update(
+        Action::RawKey(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        )),
+        &fx,
+    );
+    assert!(state.intro_preview.is_none());
+    assert_eq!(state.view, View::Settings);
 
     state.update(Action::SaveSettings, &fx);
     let saved: Config = toml::from_str(&std::fs::read_to_string(&fx.config_path).unwrap()).unwrap();
     assert_eq!(saved.cover_size, CoverSize::Large);
-    assert!(!saved.intro_animation);
+    assert_eq!(saved.intro_animation, crate::config::IntroStyle::Spectrum);
+}
+
+#[tokio::test]
+async fn intro_preview_is_mouse_modal_and_clicks_cannot_press_buttons_beneath() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.update(Action::SwitchView(View::Settings), &fx);
+    state.start_intro_preview();
+    assert!(state.intro_preview.is_some(), "default style must preview");
+
+    // A click lands on the Save button hidden under the splash; resolving
+    // it against hits would save and close the settings page mid-preview.
+    let save = ratatui::layout::Rect::new(0, 0, 20, 3);
+    let mut hits = crate::ui::Hits::default();
+    hits.settings_save.push(save);
+    let click = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: save.x + 1,
+        row: save.y + 1,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    super::apply(&mut state, Action::Mouse(click), &fx, &hits);
+    assert!(
+        state.intro_preview.is_none(),
+        "a click dismisses the splash"
+    );
+    assert_eq!(
+        state.view,
+        View::Settings,
+        "the button beneath stays unpressed"
+    );
+    assert!(!fx.config_path.exists(), "nothing was saved by the click");
 }
 
 #[tokio::test]

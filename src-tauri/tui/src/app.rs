@@ -703,9 +703,16 @@ pub struct AppState {
     pub show_help: bool,
     pub force_redraw: bool,
     pub spectrum: SpectrumView,
+    /// A running intro-style preview: full-screen, any key dismisses it.
+    pub(crate) intro_preview: Option<IntroPreview>,
     pending_g: bool,
     pending_auto_next: bool,
     should_quit: bool,
+}
+
+pub(crate) struct IntroPreview {
+    pub seq: crate::logo::IntroSequence,
+    pub started: std::time::Instant,
 }
 
 impl AppState {
@@ -834,6 +841,7 @@ impl AppState {
             confirm_quit: false,
             show_help: false,
             force_redraw: false,
+            intro_preview: None,
             spectrum: SpectrumView::new(config.spectrum_style),
             pending_g: false,
             pending_auto_next: false,
@@ -1521,6 +1529,21 @@ impl AppState {
             background: self.theme.bg,
             detail_scale: self.pixel_detail_scale,
             detail: self.config.cover_detail,
+        }
+    }
+
+    /// The intro renders the mark with the idle dashboard's own size and
+    /// styling, so its final frame is the picture the dashboard keeps.
+    pub(crate) fn intro_mark_spec(&self) -> crate::logo::MarkSpec {
+        let (cols, rows) = self.desired_idle_cells();
+        crate::logo::MarkSpec {
+            // The square the art fits into: width, or 2× height on wide
+            // terminals — the same fit from_image_bytes resolves to.
+            side: usize::from(cols.min(rows * 2)) & !1,
+            palette_mode: self.config.cover_palette,
+            palette: self.theme.palette,
+            detail_scale: self.pixel_detail_scale,
+            background: self.theme.bg,
         }
     }
 
@@ -2860,11 +2883,20 @@ async fn event_loop(
         state.begin_session_restore(&fx, session);
     }
     state.reconcile_selected_cover(&fx);
+    // The launch intro is the same overlay the settings page previews with;
+    // on the idle dashboard it lands pixel-for-pixel on the idle art.
+    if state.config.intro_animation != crate::config::IntroStyle::Off {
+        state.start_intro_preview();
+    }
     let mut hits = ui::Hits::default();
     let mut spectrum_ticks = tokio::time::interval(Duration::from_millis(50));
     spectrum_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut graphics_geometry_ticks = tokio::time::interval(GRAPHICS_GEOMETRY_POLL_INTERVAL);
     graphics_geometry_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The intro preview steps at animation rate; the arm only exists to wake
+    // the draw loop, frame selection is wall-clock based.
+    let mut intro_preview_ticks = tokio::time::interval(Duration::from_millis(33));
+    intro_preview_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     terminal.draw(|frame| ui::draw(frame, &mut state, &mut hits))?;
     let mut ui_tick = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_millis(120),
@@ -2939,6 +2971,7 @@ async fn event_loop(
                     state.refresh_graphics_geometry(font_size, &fx);
                 }
             }
+            _ = intro_preview_ticks.tick(), if state.intro_preview.is_some() => {}
         }
         if state.should_quit {
             break;
@@ -2981,7 +3014,9 @@ async fn event_loop(
 fn apply(state: &mut AppState, action: Action, fx: &Effects, hits: &ui::Hits) {
     match action {
         Action::Mouse(mouse) => {
-            if state.command_palette.open || state.show_help {
+            // Modal overlays take the raw event: resolving clicks against
+            // hits would press the Save/Cancel/row targets hidden beneath.
+            if state.command_palette.open || state.show_help || state.intro_preview.is_some() {
                 state.update(Action::Mouse(mouse), fx);
             } else {
                 let selected = if state.view == View::Search && state.search.input

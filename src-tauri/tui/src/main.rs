@@ -118,14 +118,10 @@ fn main() -> Result<()> {
     let config = config::Config::load_with_metadata()?;
     i18n::init(i18n::Lang::from_config(&config.config.language));
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        if config.config.intro_animation {
-            let style = term::Style::detect();
-            let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-            logo::play_interactive(style, &version).await?;
-        }
-        app::run(config).await
-    })
+    // The TUI plays its intro inside the app itself, animating the logo
+    // straight into the idle dashboard's own art; only `ypm update` still
+    // uses the standalone raw-terminal intro.
+    runtime.block_on(app::run(config))
 }
 
 /// Logs go to a file: stdout/stderr belong to the TUI.

@@ -400,6 +400,51 @@ pub fn t_update_available(version: &str) -> String {
     }
 }
 
+pub fn intro_style_name(style: crate::config::IntroStyle) -> &'static str {
+    use crate::config::IntroStyle;
+    match (language(), style) {
+        (Lang::Zh, IntroStyle::Off) => "关闭",
+        (Lang::Zh, IntroStyle::Classic) => "经典扫描",
+        (Lang::Zh, IntroStyle::Pulse) => "脉冲沉淀",
+        (Lang::Zh, IntroStyle::Scan) => "扫描余晖",
+        (Lang::Zh, IntroStyle::Ripple) => "波纹绽放",
+        (Lang::Zh, IntroStyle::Dissolve) => "溶解浮现",
+        (Lang::Zh, IntroStyle::Breath) => "呼吸淡入",
+        (Lang::Zh, IntroStyle::Spectrum) => "频谱升起",
+        (Lang::Zh, IntroStyle::Vinyl) => "唱片起转",
+        (Lang::Zh, IntroStyle::Shimmer) => "流光掠影",
+        (Lang::Zh, IntroStyle::Rain) => "字符雨归位",
+        (Lang::Zh, IntroStyle::Zoom) => "由小及大",
+        (Lang::Zh, IntroStyle::Notes) => "音符拼图",
+        (Lang::En, IntroStyle::Off) => "off",
+        (Lang::En, IntroStyle::Classic) => "classic",
+        (Lang::En, IntroStyle::Pulse) => "pulse",
+        (Lang::En, IntroStyle::Scan) => "scanline",
+        (Lang::En, IntroStyle::Ripple) => "ripple",
+        (Lang::En, IntroStyle::Dissolve) => "dissolve",
+        (Lang::En, IntroStyle::Breath) => "breath",
+        (Lang::En, IntroStyle::Spectrum) => "spectrum",
+        (Lang::En, IntroStyle::Vinyl) => "vinyl",
+        (Lang::En, IntroStyle::Shimmer) => "shimmer",
+        (Lang::En, IntroStyle::Rain) => "matrix rain",
+        (Lang::En, IntroStyle::Zoom) => "zoom",
+        (Lang::En, IntroStyle::Notes) => "note puzzle",
+        (Lang::Ja, IntroStyle::Off) => "オフ",
+        (Lang::Ja, IntroStyle::Classic) => "クラシック",
+        (Lang::Ja, IntroStyle::Pulse) => "パルス",
+        (Lang::Ja, IntroStyle::Scan) => "スキャン",
+        (Lang::Ja, IntroStyle::Ripple) => "波紋",
+        (Lang::Ja, IntroStyle::Dissolve) => "ディゾルブ",
+        (Lang::Ja, IntroStyle::Breath) => "ブレス",
+        (Lang::Ja, IntroStyle::Spectrum) => "スペクトラム",
+        (Lang::Ja, IntroStyle::Vinyl) => "レコード",
+        (Lang::Ja, IntroStyle::Shimmer) => "シマー",
+        (Lang::Ja, IntroStyle::Rain) => "文字雨",
+        (Lang::Ja, IntroStyle::Zoom) => "ズーム",
+        (Lang::Ja, IntroStyle::Notes) => "音符パズル",
+    }
+}
+
 pub fn t_update_checking() -> &'static str {
     match language() {
         Lang::Zh => "检查更新",

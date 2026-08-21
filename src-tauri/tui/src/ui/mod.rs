@@ -12,9 +12,9 @@ mod settings;
 pub(crate) mod text;
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use ratatui::Frame;
 use yesplaymusic_core::cache::AudioQuality;
 
@@ -180,6 +180,10 @@ pub struct Hits {
     pub settings_adjust: Vec<(Rect, i32)>,
     pub settings_save: Vec<Rect>,
     pub settings_cancel: Vec<Rect>,
+    /// Where the idle dashboard would draw its art this frame. The intro
+    /// overlay anchors the mark here so the animation lands exactly on the
+    /// dashboard's own logo — same cells, same colours, no visible switch.
+    pub idle_art: Option<Rect>,
 }
 
 impl Hits {
@@ -224,6 +228,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     hits.settings_adjust.clear();
     hits.settings_save.clear();
     hits.settings_cancel.clear();
+    hits.idle_art = None;
 
     let theme = &state.theme;
     let area = frame.area();
@@ -289,6 +294,127 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
     if state.command_palette.open {
         command_palette::dim_background(frame, &state.theme);
         command_palette::draw(frame, state, area);
+    }
+
+    if state.intro_preview.is_some() {
+        let anchor = hits.idle_art;
+        draw_intro_preview(frame, state, area, anchor);
+    }
+}
+
+/// The intro overlay. Anchored to the idle dashboard's art rect it animates
+/// the logo into the exact cells the dashboard keeps showing afterwards —
+/// no switch, no jump. Without an anchor (settings preview, playing view)
+/// it owns the screen, mirroring the standalone `ypm update` intro.
+fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, anchor: Option<Rect>) {
+    let Some(preview) = &state.intro_preview else {
+        return;
+    };
+    if preview.started.elapsed() >= preview.seq.total() {
+        state.intro_preview = None;
+        return;
+    }
+    let preview = state.intro_preview.as_ref().expect("checked above");
+    let seq = &preview.seq;
+    let mut remaining = preview.started.elapsed();
+    let mut current = seq.frames.last().expect("sequences are never empty");
+    for candidate in &seq.frames {
+        if remaining < candidate.dur {
+            current = candidate;
+            break;
+        }
+        remaining -= candidate.dur;
+    }
+
+    let theme_bg = state.theme.bg;
+    let cells = crate::logo::FrameCells::new(seq, current);
+    let view_cols = seq.sub_w as u16;
+    let view_rows = (seq.sub_h / 2) as u16;
+    let mark_cols = (seq.mark_side) as u16;
+    let mark_rows = (seq.mark_side / 2) as u16;
+    let (left, top, wordmark) = match anchor {
+        // The sequence's mark sits pad columns/rows inside its viewport;
+        // subtract them so the mark itself lands on the anchor rect. The
+        // dashboard draws its own version hint, so no wordmark here.
+        Some(rect) => (
+            rect.x.saturating_sub((view_cols - mark_cols) / 2),
+            rect.y.saturating_sub((view_rows - mark_rows) / 2),
+            false,
+        ),
+        None => {
+            // Clear wipes the glyphs and modifiers underneath; a styled
+            // Block alone only recolours the background and lets the page's
+            // text bleed through the splash.
+            frame.render_widget(Clear, area);
+            frame.render_widget(Block::new().style(Style::new().bg(theme_bg)), area);
+            (
+                area.x + area.width.saturating_sub(view_cols) / 2,
+                area.y + area.height.saturating_sub(view_rows + 5) / 2 + 1,
+                true,
+            )
+        }
+    };
+    let buf = frame.buffer_mut();
+    for row in 0..view_rows {
+        for col in 0..view_cols {
+            let Some(cell) = buf.cell_mut((left + col, top + row)) else {
+                continue;
+            };
+            match cells.cell(usize::from(col), usize::from(row)) {
+                crate::logo::ComposedCell::Empty => {}
+                crate::logo::ComposedCell::Pixels { top, bottom } => {
+                    let rgb = |value: Option<(u8, u8, u8)>| match value {
+                        Some((r, g, b)) => Color::Rgb(r, g, b),
+                        None => theme_bg,
+                    };
+                    match (top, bottom) {
+                        (Some(_), _) => {
+                            cell.set_char('▀').set_fg(rgb(top)).set_bg(rgb(bottom));
+                        }
+                        (None, Some(_)) => {
+                            cell.set_char('▄').set_fg(rgb(bottom)).set_bg(theme_bg);
+                        }
+                        (None, None) => {}
+                    }
+                }
+                crate::logo::ComposedCell::Note { glyph, rgb, under } => {
+                    let under = match under {
+                        Some((r, g, b)) => Color::Rgb(r, g, b),
+                        None => theme_bg,
+                    };
+                    cell.set_char(glyph)
+                        .set_fg(Color::Rgb(rgb.0, rgb.1, rgb.2))
+                        .set_bg(under);
+                }
+            }
+        }
+    }
+    if wordmark && current.wm >= 0.15 {
+        let name_style = if current.wm < 0.6 {
+            Style::new().fg(state.theme.dim).bg(theme_bg)
+        } else {
+            Style::new()
+                .fg(state.theme.accent)
+                .bg(theme_bg)
+                .add_modifier(Modifier::BOLD)
+        };
+        let centre = left + view_cols / 2;
+        let name_row = top + view_rows + 1;
+        let version = concat!("v", env!("CARGO_PKG_VERSION"));
+        frame.render_widget(
+            Paragraph::new("ypm").style(name_style),
+            Rect::new(centre.saturating_sub(1), name_row, 3, 1).intersection(area),
+        );
+        frame.render_widget(
+            Paragraph::new(version).style(Style::new().fg(state.theme.dim).bg(theme_bg)),
+            Rect::new(
+                centre.saturating_sub(version.len() as u16 / 2),
+                name_row + 1,
+                version.len() as u16,
+                1,
+            )
+            .intersection(area),
+        );
     }
 }
 

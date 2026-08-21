@@ -245,7 +245,12 @@ fn draw_dashboard(frame: &mut Frame, state: &AppState, area: Rect, hits: &mut Hi
     .areas(area);
 
     let art_rect = centered(art_area, state.idle_art.width, art_height);
-    frame.render_widget(&state.idle_art, art_rect);
+    // The intro overlay animates the logo into exactly this rect; drawing
+    // the finished art underneath would leak through transparent margins.
+    hits.idle_art = Some(art_rect);
+    if state.intro_preview.is_none() {
+        frame.render_widget(&state.idle_art, art_rect);
+    }
 
     // The reserved hint row carries the build's own version until an
     // update exists, which is the more useful thing to show there.

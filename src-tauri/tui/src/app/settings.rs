@@ -339,7 +339,10 @@ impl AppState {
                 self.config.update_check = !self.config.update_check;
             }
             SettingField::IntroAnimation => {
-                self.config.intro_animation = !self.config.intro_animation;
+                use crate::config::IntroStyle;
+                self.config.intro_animation =
+                    cycle(&IntroStyle::ALL, &self.config.intro_animation, delta);
+                self.start_intro_preview();
             }
             SettingField::QueueBehavior => {
                 self.config.enter_replaces_queue = !self.config.enter_replaces_queue;
@@ -480,7 +483,9 @@ impl AppState {
             }
             SettingField::SpectrumStereo => self.on_off(self.config.spectrum_stereo),
             SettingField::UpdateCheck => self.on_off(self.config.update_check),
-            SettingField::IntroAnimation => self.on_off(self.config.intro_animation),
+            SettingField::IntroAnimation => {
+                i18n::intro_style_name(self.config.intro_animation).to_owned()
+            }
             SettingField::QueueBehavior => if self.config.enter_replaces_queue {
                 i18n::t(Key::SettingQueueList)
             } else {
@@ -497,6 +502,40 @@ impl AppState {
 
     fn on_off(&self, enabled: bool) -> String {
         i18n::t(if enabled { Key::On } else { Key::Off }).to_owned()
+    }
+
+    /// Cycling the intro style plays the chosen animation immediately as a
+    /// preview; any key dismisses it. The same call starts the launch intro,
+    /// so what the settings page previews is exactly what startup plays.
+    pub(crate) fn start_intro_preview(&mut self) {
+        use crate::config::IntroStyle;
+        let style = self.config.intro_animation;
+        if style == IntroStyle::Off {
+            self.intro_preview = None;
+            return;
+        }
+        // Transparent themes resolve to the detected terminal background,
+        // so fades rise out of the colour actually behind the page instead
+        // of assuming black under a light terminal.
+        let bg = match self.theme.resolved_background(self.terminal_background) {
+            Some(ratatui::style::Color::Rgb(r, g, b)) => (r, g, b),
+            _ => (0, 0, 0),
+        };
+        let (cols, rows) = self.terminal_size;
+        // A terminal too small for the mark gets no animation rather than a
+        // clipped one; the dashboard's own art handles tiny sizes already.
+        let spec = self.intro_mark_spec();
+        if usize::from(rows) < spec.side / 2 + 2 || usize::from(cols) < spec.side + 2 {
+            self.intro_preview = None;
+            return;
+        }
+        self.intro_preview =
+            crate::logo::sequence(style, bg, crate::logo::notes_pads(cols, rows), &spec).map(
+                |seq| super::IntroPreview {
+                    seq,
+                    started: std::time::Instant::now(),
+                },
+            );
     }
 
     pub(crate) fn toggle_spectrum(&mut self, fx: &Effects) -> Result<(), String> {

@@ -102,6 +102,67 @@ pub enum ThemeMode {
     Light,
 }
 
+/// Which intro animation plays on startup and before `ypm update`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntroStyle {
+    Off,
+    Classic,
+    Pulse,
+    Scan,
+    Ripple,
+    Dissolve,
+    Breath,
+    Spectrum,
+    Vinyl,
+    Shimmer,
+    Rain,
+    Zoom,
+    Notes,
+}
+
+impl IntroStyle {
+    /// Settings-page cycle order: the default first, off last.
+    pub const ALL: [IntroStyle; 13] = [
+        IntroStyle::Notes,
+        IntroStyle::Spectrum,
+        IntroStyle::Shimmer,
+        IntroStyle::Pulse,
+        IntroStyle::Classic,
+        IntroStyle::Scan,
+        IntroStyle::Ripple,
+        IntroStyle::Dissolve,
+        IntroStyle::Breath,
+        IntroStyle::Vinyl,
+        IntroStyle::Rain,
+        IntroStyle::Zoom,
+        IntroStyle::Off,
+    ];
+
+    pub fn config_name(self) -> &'static str {
+        match self {
+            IntroStyle::Off => "off",
+            IntroStyle::Classic => "classic",
+            IntroStyle::Pulse => "pulse",
+            IntroStyle::Scan => "scan",
+            IntroStyle::Ripple => "ripple",
+            IntroStyle::Dissolve => "dissolve",
+            IntroStyle::Breath => "breath",
+            IntroStyle::Spectrum => "spectrum",
+            IntroStyle::Vinyl => "vinyl",
+            IntroStyle::Shimmer => "shimmer",
+            IntroStyle::Rain => "rain",
+            IntroStyle::Zoom => "zoom",
+            IntroStyle::Notes => "notes",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|style| style.config_name() == name)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -173,8 +234,13 @@ pub struct Config {
     pub spectrum_stereo: bool,
     /// Silent GitHub release check on startup; hints only, never self-updates.
     pub update_check: bool,
-    /// Play the skippable pixel-logo intro on startup and before updates.
-    pub intro_animation: bool,
+    /// Which skippable intro plays on startup and before updates; legacy
+    /// booleans still parse (true = default style, false = off).
+    #[serde(
+        deserialize_with = "deserialize_intro_style",
+        serialize_with = "serialize_intro_style"
+    )]
+    pub intro_animation: IntroStyle,
 }
 
 #[derive(Debug)]
@@ -242,7 +308,7 @@ impl Default for Config {
             spectrum_sensitivity: SpectrumSensitivity::default(),
             spectrum_stereo: false,
             update_check: true,
-            intro_animation: true,
+            intro_animation: IntroStyle::Notes,
         }
     }
 }
@@ -357,7 +423,9 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 # spectrum_sensitivity = "normal" # soft | normal | sharp 跳动灵敏度
 # spectrum_stereo = false      # 左右声道分离显示（中间低频、两侧高频）
 # update_check = true          # 启动时静默检查新版本
-# intro_animation = true       # 启动和 ypm update 时播放动画；任意键可跳过
+# intro_animation = "notes"   # 启动动画方案，任意键可跳过：notes | spectrum | shimmer |
+#                              # pulse | classic | scan | ripple | dissolve | breath |
+#                              # vinyl | rain | zoom | off；旧配置的 true/false 仍兼容
 "#;
 
 fn deserialize_language<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -417,6 +485,35 @@ where
         AudioQuality::Lossless => "lossless",
         AudioQuality::HiRes => "hires",
     })
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum IntroSetting {
+    /// The pre-0.9.4 on/off switch.
+    Flag(bool),
+    Name(String),
+}
+
+fn deserialize_intro_style<'de, D>(deserializer: D) -> Result<IntroStyle, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    match IntroSetting::deserialize(deserializer)? {
+        IntroSetting::Flag(true) => Ok(IntroStyle::Notes),
+        IntroSetting::Flag(false) => Ok(IntroStyle::Off),
+        IntroSetting::Name(name) => IntroStyle::from_name(&name)
+            .ok_or_else(|| D::Error::custom("unsupported intro animation style")),
+    }
+}
+
+fn serialize_intro_style<S>(style: &IntroStyle, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(style.config_name())
 }
 
 #[cfg(unix)]
@@ -483,7 +580,7 @@ mod tests {
         assert!(config.spectrum_flatten);
         assert!(config.spectrum_gradient);
         assert!(!config.spectrum_stereo);
-        assert!(config.intro_animation);
+        assert_eq!(config.intro_animation, IntroStyle::Notes);
 
         let parsed: Config = toml::from_str("quality = \"lossless\"").unwrap();
         assert_eq!(parsed.quality, AudioQuality::Lossless);
@@ -547,6 +644,29 @@ mod tests {
             explicit.apply_terminal_brightness(Some(is_light));
             assert_eq!(explicit.config.theme, "dracula");
         }
+    }
+
+    #[test]
+    fn intro_animation_accepts_legacy_booleans_and_style_names() {
+        // Pre-0.9.4 configs stored a bool: true meant "the default intro",
+        // which is now the notes puzzle; false stays off.
+        let legacy_on: Config = toml::from_str("intro_animation = true").unwrap();
+        assert_eq!(legacy_on.intro_animation, IntroStyle::Notes);
+        let legacy_off: Config = toml::from_str("intro_animation = false").unwrap();
+        assert_eq!(legacy_off.intro_animation, IntroStyle::Off);
+
+        for style in IntroStyle::ALL {
+            let text = format!("intro_animation = \"{}\"", style.config_name());
+            let parsed: Config = toml::from_str(&text).unwrap();
+            assert_eq!(parsed.intro_animation, style, "{text}");
+        }
+
+        // A typo must surface as an error, never silently become a default.
+        assert!(toml::from_str::<Config>("intro_animation = \"sparkle\"").is_err());
+
+        // Round-trip: the enum saves as its string name.
+        let saved = toml::to_string(&Config::default()).unwrap();
+        assert!(saved.contains("intro_animation = \"notes\""));
     }
 
     #[test]
@@ -700,7 +820,7 @@ mod tests {
                 spectrum_sensitivity: SpectrumSensitivity::Sharp,
                 spectrum_stereo: true,
                 update_check: false,
-                intro_animation: false,
+                intro_animation: IntroStyle::Off,
             };
 
             let encoded = toml::to_string(&config).unwrap();

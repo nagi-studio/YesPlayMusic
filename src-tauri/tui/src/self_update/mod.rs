@@ -89,7 +89,7 @@ pub(crate) async fn install(tag: &str, on_stage: &mut impl FnMut(Stage)) -> Resu
     Ok(target)
 }
 
-pub(crate) async fn run(show_intro: bool) -> Result<()> {
+pub(crate) async fn run(intro: crate::config::IntroStyle) -> Result<()> {
     // A keg skips preflight entirely: the signature and asset checks guard
     // the binary swap, and a keg never reaches one.
     let brew = update::installed_via_brew();
@@ -101,10 +101,10 @@ pub(crate) async fn run(show_intro: bool) -> Result<()> {
 
     // The intro owns the screen, so anything printed before it would be
     // wiped; a terminal too small for the mark gets the wordmark instead.
-    if show_intro {
+    if intro != crate::config::IntroStyle::Off {
         let style = reporter.style();
         let version = format!("v{current}");
-        if !crate::logo::play_interactive(style, &version).await? {
+        if !crate::logo::play_interactive(style, &version, intro).await? {
             print!("{}", crate::logo::wordmark(style, &version));
         }
     }
