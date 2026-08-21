@@ -688,11 +688,16 @@ pub(super) fn draw_player_bar(
     // also leaves the text column usable width, otherwise it would overlap
     // the title and controls.
     let cover_cells = (content.height.saturating_mul(2), content.height);
-    let cover_slot = cover_cells.0 + 2;
+    // The panels above are airy line borders, so sitting on the content
+    // edge suits them; a solid block of art on that same column reads as
+    // pressed against the screen. Inset it to the panels' inner text column.
+    let cover_inset = super::PANEL_GAP_X;
+    let cover_slot = cover_inset + cover_cells.0 + 2;
     const MIN_TEXT_COLUMN: u16 = 24;
     let (cover_area, right) = if expanded && content.width >= cover_slot + MIN_TEXT_COLUMN {
         (
             Some(Rect {
+                x: content.x + cover_inset,
                 width: cover_cells.0,
                 height: cover_cells.1,
                 ..content
@@ -1039,6 +1044,46 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn player_bar_cover_keeps_a_breathing_column_off_the_content_edge() {
+        // The body panels above are airy line borders sitting on the content
+        // edge; a solid block of art on that same column reads as pressed
+        // against the screen. The bar insets the cover to the panels' inner
+        // text column instead.
+        let config = Config::default();
+        let mut state = AppState::new(&config);
+        state.now = Some(NowPlaying {
+            title: "雨とカプチーノ".into(),
+            artist: "ヨルシカ".into(),
+            album: String::new(),
+            artist_id: None,
+            album_id: None,
+        });
+        let area = Rect::new(0, 0, 90, 10);
+        state.bar_cover = Some(crate::pixel::vinyl(
+            state.theme.palette,
+            state.theme.bg,
+            (area.height - 1) * 2,
+            area.height - 1,
+            crate::pixel::CoverDetail::Half,
+        ));
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Hits::default();
+        terminal
+            .draw(|frame| super::draw_player_bar(frame, &mut state, area, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let inked = |x: u16| (0..area.height).any(|y| buffer[(x, y)].symbol() != " ");
+        for x in 0..crate::ui::PANEL_GAP_X {
+            assert!(!inked(x), "column {x} must stay clear of the cover");
+        }
+        assert!(
+            inked(crate::ui::PANEL_GAP_X),
+            "the cover must start right at the inner content column"
+        );
     }
 
     fn click(rect: Rect) -> MouseEvent {
