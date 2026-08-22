@@ -942,11 +942,14 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut hits = Hits::default();
 
-        // The final frame of the intro, still drawn by the overlay.
+        // The final frame of the intro, still drawn by the overlay. The
+        // resting frame lasts 900ms; land 200ms before expiry so a slow CI
+        // runner cannot burn through the margin between this write and the
+        // elapsed() check inside draw (1ms flaked on Windows).
         {
             let preview = state.intro_preview.as_mut().expect("preview must start");
             preview.started = std::time::Instant::now() - preview.seq.total()
-                + std::time::Duration::from_millis(1);
+                + std::time::Duration::from_millis(200);
         }
         terminal
             .draw(|frame| draw(frame, &mut state, &mut hits))
