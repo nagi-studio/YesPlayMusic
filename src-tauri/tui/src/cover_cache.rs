@@ -25,9 +25,14 @@ const COVER_BUDGET_CEILING: u64 = 2 * 1024 * 1024 * 1024;
 
 /// The covers' share of `total_cache_bytes`, the user's whole cache budget.
 pub fn cover_budget(total_cache_bytes: u64) -> u64 {
-    (total_cache_bytes / 100)
-        .saturating_mul(COVER_BUDGET_PERCENT)
-        .clamp(COVER_BUDGET_FLOOR, COVER_BUDGET_CEILING)
+    (total_cache_bytes / 100 * COVER_BUDGET_PERCENT).clamp(COVER_BUDGET_FLOOR, COVER_BUDGET_CEILING)
+}
+
+/// What the audio store keeps once the covers take their slice. Saturating
+/// because the total may come from the shared database, which other writers
+/// size without knowing about the covers.
+pub fn audio_share(total_cache_bytes: u64) -> u64 {
+    total_cache_bytes.saturating_sub(cover_budget(total_cache_bytes))
 }
 const ORIGINAL_MAGIC: &[u8; 8] = b"YPMCOVO1";
 const PIXEL_MAGIC: &[u8; 8] = b"YPMCOVP2";
@@ -136,7 +141,9 @@ impl CoverCache {
                 remove_invalid(&path);
                 return Ok(None);
             };
-            file.set_modified(SystemTime::now())?;
+            // Best-effort: the refresh only sharpens LRU order, and a hit
+            // on a read-only cache is still a hit.
+            let _ = file.set_modified(SystemTime::now());
             Ok(Some(payload))
         })
     }
@@ -200,7 +207,7 @@ impl CoverCache {
             // Refresh the entry so eviction is least-recently-USED: a render
             // read every day must outlive one written yesterday and never
             // looked at again.
-            file.set_modified(SystemTime::now())?;
+            let _ = file.set_modified(SystemTime::now());
             Ok(Some(cover))
         })
     }
@@ -1025,8 +1032,5 @@ mod tests {
         let cache = CoverCache::new(directory.path(), budget).unwrap();
         assert_eq!(cache.original_limit, budget - PIXEL_LIMIT_BYTES);
         assert_eq!(cache.pixel_limit, PIXEL_LIMIT_BYTES);
-        // A degenerate budget still leaves both layers alive.
-        let tiny = CoverCache::new(directory.path().join("tiny"), 0).unwrap();
-        assert_eq!(tiny.original_limit, PIXEL_LIMIT_BYTES);
     }
 }

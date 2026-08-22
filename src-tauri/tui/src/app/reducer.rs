@@ -36,11 +36,22 @@ impl AppState {
         // too — the sequence was sized for the old geometry.
         if self.intro_preview.is_some() {
             match &action {
-                Action::RawKey(_) | Action::Resize { .. } => {
+                Action::RawKey(key) => {
                     self.intro_preview = None;
-                    if matches!(action, Action::RawKey(_)) {
+                    // In settings the preview is a peek, not a mode: the key
+                    // that closed it still does its job, so holding h/l
+                    // flips through the animations and Enter/Esc keep their
+                    // meaning. The launch intro swallows the key — a skip
+                    // must not also move the selection — except Ctrl+C,
+                    // which always means quit.
+                    let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c');
+                    if self.view != View::Settings && !ctrl_c {
                         return;
                     }
+                }
+                Action::Resize { .. } => {
+                    self.intro_preview = None;
                 }
                 Action::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => {
                     self.intro_preview = None;

@@ -306,8 +306,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, hits: &mut Hits) {
         command_palette::draw(frame, state, area);
     }
 
-    if state.intro_preview.is_some() {
-        let anchor = hits.idle_art;
+    if let Some(preview) = &state.intro_preview {
+        let anchor = preview.anchored.then_some(hits.idle_art).flatten();
         draw_intro_preview(frame, state, area, anchor);
     }
 }
@@ -363,10 +363,26 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
     let buf = frame.buffer_mut();
     for row in 0..view_rows {
         for col in 0..view_cols {
-            let Some(cell) = buf.cell_mut((left + col, top + row)) else {
+            let at = (left + col, top + row);
+            let composed = cells.cell(usize::from(col), usize::from(row));
+            // Anchored, the mark must not outgrow the art rect the dashboard
+            // will actually keep — on short terminals the layout clips the
+            // art, and pixels painted past the rect would vanish on the
+            // frame the intro ends. Flying note glyphs stay unclipped.
+            if let Some(rect) = anchor {
+                let mark_cell = matches!(
+                    composed,
+                    crate::logo::ComposedCell::Pixels { .. }
+                        | crate::logo::ComposedCell::Art { .. }
+                );
+                if mark_cell && !rect.contains(ratatui::layout::Position::from(at)) {
+                    continue;
+                }
+            }
+            let Some(cell) = buf.cell_mut(at) else {
                 continue;
             };
-            match cells.cell(usize::from(col), usize::from(row)) {
+            match composed {
                 crate::logo::ComposedCell::Empty => {}
                 crate::logo::ComposedCell::Pixels { top, bottom } => {
                     let rgb = |value: Option<(u8, u8, u8)>| match value {
@@ -424,6 +440,27 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
                 centre.saturating_sub(version.len() as u16 / 2),
                 name_row + 1,
                 version.len() as u16,
+                1,
+            )
+            .intersection(area),
+        );
+    }
+    // In settings the preview answers "which one is this and how do I move
+    // on" right where the eye already is — the lazygit school of hints.
+    if state.view == crate::action::View::Settings {
+        let label = format!(
+            "{}  ·  {}",
+            i18n::intro_style_name(state.config.intro_animation),
+            i18n::t(crate::i18n::Key::IntroPreviewKeysHint),
+        );
+        let width = label.chars().count() as u16;
+        let row = area.y + area.height.saturating_sub(2);
+        frame.render_widget(
+            Paragraph::new(label).style(Style::new().fg(state.theme.dim).bg(theme_bg)),
+            Rect::new(
+                area.x + area.width.saturating_sub(width) / 2,
+                row,
+                width.min(area.width),
                 1,
             )
             .intersection(area),
@@ -910,8 +947,9 @@ mod tests {
             .draw(|frame| draw(frame, &mut state, &mut hits))
             .unwrap();
         let rect = hits.idle_art.expect("the dashboard laid out its art");
-        let intro: Vec<_> = (rect.y..rect.bottom())
-            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+        let full = *terminal.backend().buffer().area();
+        let intro: Vec<_> = (full.y..full.bottom())
+            .flat_map(|y| (full.x..full.right()).map(move |x| (x, y)))
             .map(|at| terminal.backend().buffer()[at].clone())
             .collect();
 
@@ -935,14 +973,17 @@ mod tests {
         terminal
             .draw(|frame| draw(frame, &mut state, &mut hits))
             .unwrap();
-        let dashboard: Vec<_> = (rect.y..rect.bottom())
-            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+        let _ = rect;
+        let dashboard: Vec<_> = (full.y..full.bottom())
+            .flat_map(|y| (full.x..full.right()).map(move |x| (x, y)))
             .map(|at| terminal.backend().buffer()[at].clone())
             .collect();
 
+        // Whole-buffer equality: a mark taller than the clipped art rect
+        // would leave rows below it that vanish on this exact frame.
         assert_eq!(
             intro, dashboard,
-            "the intro's last frame must already be the dashboard's art"
+            "the intro's last frame must already be the dashboard's whole page"
         );
     }
 

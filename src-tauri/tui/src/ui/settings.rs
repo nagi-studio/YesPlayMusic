@@ -108,7 +108,9 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
         _ => i18n::t(hint).to_owned(),
     };
     frame.render_widget(
-        Paragraph::new(hint).style(Style::new().fg(theme.dim)),
+        Paragraph::new(hint)
+            .style(Style::new().fg(theme.dim))
+            .wrap(ratatui::widgets::Wrap { trim: true }),
         hint_area,
     );
 

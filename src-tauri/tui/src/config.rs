@@ -390,6 +390,15 @@ fn validate_config(config: &Config) -> Result<(), ConfigLoadError> {
             value: config.pixel_scale.to_string(),
         });
     }
+    // The covers' floor is 256MiB; a total below 1GiB would leave the audio
+    // store with less than the covers, which no one means. The settings-page
+    // presets start at 1024 too.
+    if config.cache_limit_mib.is_some_and(|mib| mib < 1024) {
+        return Err(ConfigLoadError::InvalidValue {
+            field: "cache_limit_mib",
+            value: config.cache_limit_mib.unwrap_or(0).to_string(),
+        });
+    }
     Ok(())
 }
 
@@ -509,8 +518,16 @@ where
     match IntroSetting::deserialize(deserializer)? {
         IntroSetting::Flag(true) => Ok(IntroStyle::Notes),
         IntroSetting::Flag(false) => Ok(IntroStyle::Off),
-        IntroSetting::Name(name) => IntroStyle::from_name(&name)
-            .ok_or_else(|| D::Error::custom("unsupported intro animation style")),
+        IntroSetting::Name(name) => IntroStyle::from_name(&name).ok_or_else(|| {
+            let valid: Vec<&str> = IntroStyle::ALL
+                .iter()
+                .map(|style| style.config_name())
+                .collect();
+            D::Error::custom(format!(
+                "unsupported intro animation style \"{name}\"; valid values: true, false, {}",
+                valid.join(", ")
+            ))
+        }),
     }
 }
 
@@ -649,6 +666,37 @@ mod tests {
             explicit.apply_terminal_brightness(Some(is_light));
             assert_eq!(explicit.config.theme, "dracula");
         }
+    }
+
+    #[test]
+    fn tiny_cache_limits_are_rejected_with_the_field_name() {
+        // The covers' floor is 256MiB; a smaller total would give audio less
+        // than the covers. The parse error names the field so the fix is
+        // one line away.
+        assert!(matches!(
+            parse_with_metadata("cache_limit_mib = 512"),
+            Err(ConfigLoadError::InvalidValue {
+                field: "cache_limit_mib",
+                ..
+            })
+        ));
+        assert!(parse_with_metadata("cache_limit_mib = 1024").is_ok());
+    }
+
+    #[test]
+    fn a_bad_intro_style_error_names_the_value_and_the_valid_ones() {
+        let error = match parse_with_metadata("intro_animation = \"notse\"") {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a bad style must not parse"),
+        };
+        assert!(
+            error.contains("notse"),
+            "the bad value must be named: {error}"
+        );
+        assert!(
+            error.contains("notes"),
+            "valid values must be listed: {error}"
+        );
     }
 
     #[test]

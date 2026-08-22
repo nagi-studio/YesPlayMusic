@@ -414,8 +414,7 @@ fn initialize_audio_cache(config: &Config) -> (Option<std::path::PathBuf>, u64) 
     }
     if let Some(limit_mib) = config.cache_limit_mib {
         if let Some(total) = limit_mib.checked_mul(1024 * 1024) {
-            let audio_bytes = total.saturating_sub(crate::cover_cache::cover_budget(total));
-            if let Err(error) = cache.set_max_bytes(audio_bytes) {
+            if let Err(error) = cache.set_max_bytes(crate::cover_cache::audio_share(total)) {
                 tracing::warn!(%error, "audio cache policy update failed");
             }
             return (Some(root), total);
@@ -728,6 +727,10 @@ pub struct AppState {
 pub(crate) struct IntroPreview {
     pub seq: crate::logo::IntroSequence,
     pub started: std::time::Instant,
+    /// Whether the intro may land on the idle art rect. A custom `idle_art`
+    /// image is not the mark the intro animates, so it takes the splash
+    /// path — a seamless handover onto a different picture is a lie.
+    pub anchored: bool,
 }
 
 impl AppState {
@@ -2721,6 +2724,10 @@ fn shellexpand_home(path: &str) -> std::path::PathBuf {
 }
 
 pub async fn run(mut loaded: LoadedConfig) -> Result<()> {
+    // Cache maintenance sweeps the stores on disk; do it before taking the
+    // terminal over so a slow disk delays the prompt, not a black screen.
+    let (cache_root, total_cache_bytes) = initialize_audio_cache(&loaded.config);
+    let covers = initialize_cover_cache(total_cache_bytes);
     let mut terminal = ratatui::init();
     let detected_background = crate::terminal_background::probe();
     let terminal_is_light = detected_background.map(|background| {
@@ -2744,6 +2751,8 @@ pub async fn run(mut loaded: LoadedConfig) -> Result<()> {
         &config,
         detected_background.map(crate::terminal_background::Rgb::color),
         terminal_is_light,
+        cache_root,
+        covers,
     )
     .await;
     let _ = crossterm::execute!(
@@ -2761,6 +2770,8 @@ async fn event_loop(
     config: &Config,
     terminal_background: Option<Color>,
     terminal_is_light: Option<bool>,
+    cache_root: Option<std::path::PathBuf>,
+    covers: Option<Arc<CoverCache>>,
 ) -> Result<()> {
     let (player, mut player_events) = player::spawn(tokio::runtime::Handle::current());
     let (actions_tx, mut actions) = mpsc::unbounded_channel();
@@ -2847,7 +2858,6 @@ async fn event_loop(
         config.quality,
         config.unm_enabled,
     ));
-    let (cache_root, total_cache_bytes) = initialize_audio_cache(config);
     let fx = Effects {
         player,
         ncm,
@@ -2856,7 +2866,7 @@ async fn event_loop(
         )),
         actions: actions_tx,
         cache_root,
-        covers: initialize_cover_cache(total_cache_bytes),
+        covers,
         config_path: config::config_dir().join("config.toml"),
     };
     #[cfg(unix)]
@@ -2902,9 +2912,8 @@ async fn event_loop(
     state.reconcile_selected_cover(&fx);
     // The launch intro is the same overlay the settings page previews with;
     // on the idle dashboard it lands pixel-for-pixel on the idle art.
-    if state.config.intro_animation != crate::config::IntroStyle::Off {
-        state.start_intro_preview();
-    }
+    // start_intro_preview handles Off itself.
+    state.start_intro_preview();
     let mut hits = ui::Hits::default();
     let mut spectrum_ticks = tokio::time::interval(Duration::from_millis(50));
     spectrum_ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -131,12 +131,28 @@ fn mark_pixels(cover: &PixelCover) -> Vec<Option<(u8, u8, u8)>> {
 fn mark(spec: &MarkSpec) -> Option<Mark> {
     let side = spec.side.max(12) & !1;
     let (cols, rows) = (side as u16, (side / 2) as u16);
+    // Half is the only lossless level for the animation grid: one cell
+    // carries two sub-pixels and two colours, so nothing is approximated
+    // and every style can shade a sub-pixel on its own.
+    let mut px = mark_pixels(&cover_with(spec, cols, rows, CoverDetail::Half)?);
+    // The render flattens the icon's transparent margin into the background
+    // colour — indistinguishable from painted pixels, so on RGB themes every
+    // animation would treat the whole square as ink and fly background-
+    // coloured tiles around. The margin comes back as exactly the background
+    // (render_sample passes it through untouched, no dither), while blended
+    // anti-aliased edges always carry an offset — so colour equality IS the
+    // transparency test. A real pixel that happens to match the background
+    // is invisible either way; skipping its animation changes nothing.
+    if let Color::Rgb(r, g, b) = spec.background {
+        for pixel in &mut px {
+            if *pixel == Some((r, g, b)) {
+                *pixel = None;
+            }
+        }
+    }
     Some(Mark {
         side,
-        // Half is the only lossless level for the animation grid: one cell
-        // carries two sub-pixels and two colours, so nothing is approximated
-        // and every style can shade a sub-pixel on its own.
-        px: mark_pixels(&cover_with(spec, cols, rows, CoverDetail::Half)?),
+        px,
         art: cover_with(spec, cols, rows, spec.detail)?,
     })
 }
@@ -1479,6 +1495,35 @@ mod tests {
     }
 
     #[test]
+    fn rgb_backgrounds_do_not_turn_the_transparent_margin_into_ink() {
+        // The icon has rounded corners; on an RGB theme the flattened corner
+        // pixels come back exactly background-coloured. Treating them as ink
+        // would make every style animate the full square — flying background
+        // tiles, glowing corners under the gleam pass.
+        let bg = (20u8, 16u8, 19u8);
+        let spec = MarkSpec {
+            side: 28,
+            palette_mode: CoverPalette::Original,
+            palette: &[],
+            detail_scale: 1.0,
+            background: Color::Rgb(bg.0, bg.1, bg.2),
+            detail: CoverDetail::Half,
+        };
+        let mark = mark(&spec).expect("mark must render");
+        assert_eq!(mark.px[0], None, "top-left corner must stay transparent");
+        assert_eq!(
+            mark.px[mark.side - 1],
+            None,
+            "top-right corner must stay transparent"
+        );
+        // And the icon itself must still be there.
+        assert!(
+            mark.px.iter().filter(|px| px.is_some()).count() > mark.side * mark.side / 2,
+            "the mask must not eat the icon"
+        );
+    }
+
+    #[test]
     fn the_intro_lands_on_the_idle_dashboards_own_art() {
         // The launch intro anchors on the idle art rect and must finish as
         // exactly the picture the dashboard keeps showing: same renderer,
@@ -1507,9 +1552,12 @@ mod tests {
         let idle_px = mark_pixels(&idle);
         for y in 0..28 {
             for x in 0..28 {
+                // The intro masks the icon's transparent margin to None while
+                // the idle art paints it in the background colour — the same
+                // pixels on screen, so compare what the viewer sees.
                 assert_eq!(
-                    last.grid[(y + 6) * seq.sub_w + (x + 6)],
-                    idle_px[y * 28 + x],
+                    last.grid[(y + 6) * seq.sub_w + (x + 6)].unwrap_or(bg),
+                    idle_px[y * 28 + x].unwrap_or(bg),
                     "pixel ({x},{y}) differs from the idle art"
                 );
             }
@@ -1552,6 +1600,7 @@ mod tests {
             )
             .expect("idle art must render");
             let cells = FrameCells::new(&seq, last);
+            let backdrop = Color::Rgb(bg.0, bg.1, bg.2);
             for row in 0..14 {
                 for col in 0..28 {
                     let want = idle.cells[row * 28 + col];
@@ -1563,6 +1612,16 @@ mod tests {
                             (want.glyph, want.fg, want.bg),
                             "{detail} cell ({col},{row}) differs from the idle art"
                         ),
+                        // The masked margin composes to Empty; the idle art
+                        // paints those cells background-on-background — the
+                        // same picture, so the cell must be all-backdrop.
+                        ComposedCell::Empty => {
+                            let visible = |color: Color| color != backdrop && color != Color::Reset;
+                            assert!(
+                                !(visible(want.bg) || visible(want.fg) && want.glyph != ' '),
+                                "{detail} cell ({col},{row}) is empty but the idle art paints it"
+                            );
+                        }
                         _ => panic!("{detail} cell ({col},{row}) never settled onto the idle art"),
                     }
                 }

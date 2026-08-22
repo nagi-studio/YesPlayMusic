@@ -75,6 +75,9 @@ pub enum Key {
     Off,
     SettingsHint,
     PixelDetailHint,
+    IntroPreviewTooSmall,
+    IntroPreviewKeysHint,
+    CacheUnavailable,
     NerdFontHint,
     NerdFontDetectedHint,
     OctantFontRequired,
@@ -291,22 +294,22 @@ fn human_bytes(bytes: u64) -> String {
 }
 
 /// The cache-limit hint: live usage against each store's slice of the
-/// budget, plus where the GUI's own knob reaches.
+/// budget. A store that cannot report a cap is unreadable, not empty —
+/// showing 0M for it would be a lie.
 pub fn t_cache_usage(usage: crate::action::CacheUsage) -> String {
-    let audio_used = human_bytes(usage.audio_used);
-    let audio_max = human_bytes(usage.audio_max);
-    let cover_used = human_bytes(usage.cover_used);
-    let cover_max = human_bytes(usage.cover_max);
+    let store = |used: u64, max: u64| -> String {
+        if max == 0 {
+            t(Key::CacheUnavailable).to_owned()
+        } else {
+            format!("{} / {}", human_bytes(used), human_bytes(max))
+        }
+    };
+    let audio = store(usage.audio_used, usage.audio_max);
+    let covers = store(usage.cover_used, usage.cover_max);
     match language() {
-        Lang::Zh => format!(
-            "音频 {audio_used} / {audio_max} · 封面 {cover_used} / {cover_max}；上限为两者合计，GUI 的共享缓存设置只管音频"
-        ),
-        Lang::En => format!(
-            "audio {audio_used} / {audio_max} · covers {cover_used} / {cover_max}; the limit covers both, the GUI knob only sizes audio"
-        ),
-        Lang::Ja => format!(
-            "音声 {audio_used} / {audio_max} · カバー {cover_used} / {cover_max}；上限は両方の合計、GUI 側の設定は音声のみ"
-        ),
+        Lang::Zh => format!("音频 {audio} · 封面 {covers}（上限为合计）"),
+        Lang::En => format!("audio {audio} · covers {covers} (limit = both)"),
+        Lang::Ja => format!("音声 {audio} · カバー {covers}（上限は合計）"),
     }
 }
 
@@ -725,7 +728,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLyricRows => "歌词行数",
             Key::SettingProgressStyle => "进度条",
             Key::SettingPixelDetail => "像素细节",
-            Key::SettingCacheLimit => "歌曲缓存上限",
+            Key::SettingCacheLimit => "缓存总上限",
             Key::SettingDefaultTag => "默认",
             Key::SettingTitleAccent => "歌名主题色",
             Key::SettingSpectrumEnabled => "频谱开关",
@@ -748,6 +751,9 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::PixelDetailHint => {
                 "3.0× / 4.0× 更高清晰度请配合封面分块 quad / sextant / octant"
             }
+            Key::IntroPreviewTooSmall => "终端太小，放不下启动动画预览",
+            Key::IntroPreviewKeysHint => "h/l 切换 · 任意键返回",
+            Key::CacheUnavailable => "暂时无法读取",
             Key::NerdFontHint => {
                 "终端字体需支持 Nerd Font\nmacOS：brew install font-symbols-only-nerd-font"
             }
@@ -903,7 +909,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLyricRows => "Lyric lines",
             Key::SettingProgressStyle => "Progress style",
             Key::SettingPixelDetail => "Pixel detail",
-            Key::SettingCacheLimit => "Cache limit",
+            Key::SettingCacheLimit => "Total cache limit",
             Key::SettingDefaultTag => "default",
             Key::SettingTitleAccent => "Accent title",
             Key::SettingSpectrumEnabled => "Spectrum",
@@ -926,6 +932,9 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::PixelDetailHint => {
                 "Pair 3.0× / 4.0× detail with quad / sextant / octant cover blocks"
             }
+            Key::IntroPreviewTooSmall => "Terminal too small for the intro preview",
+            Key::IntroPreviewKeysHint => "h/l switch · any key returns",
+            Key::CacheUnavailable => "unreadable right now",
             Key::NerdFontHint => {
                 "Your terminal font must support Nerd Font\nmacOS: brew install font-symbols-only-nerd-font"
             }
@@ -1083,7 +1092,7 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::SettingLyricRows => "歌詞の行数",
             Key::SettingProgressStyle => "進行表示",
             Key::SettingPixelDetail => "ピクセル詳細",
-            Key::SettingCacheLimit => "キャッシュ上限",
+            Key::SettingCacheLimit => "キャッシュ合計上限",
             Key::SettingDefaultTag => "デフォルト",
             Key::SettingTitleAccent => "タイトルをアクセント色に",
             Key::SettingSpectrumEnabled => "スペクトラム",
@@ -1106,6 +1115,9 @@ fn t_for(lang: Lang, key: Key) -> &'static str {
             Key::PixelDetailHint => {
                 "3.0× / 4.0× は quad / sextant / octant のカバー分割と併用してください"
             }
+            Key::IntroPreviewTooSmall => "端末が小さすぎてプレビューできません",
+            Key::IntroPreviewKeysHint => "h/l 切替 · 任意キーで戻る",
+            Key::CacheUnavailable => "読み取り不可",
             Key::NerdFontHint => {
                 "端末のフォントはNerd Font対応が必要です\nmacOS: brew install font-symbols-only-nerd-font"
             }

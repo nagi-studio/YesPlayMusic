@@ -105,6 +105,33 @@ impl SettingField {
     }
 }
 
+fn spawn_cache_usage_probe(
+    audio_root: Option<std::path::PathBuf>,
+    covers: Option<std::sync::Arc<crate::cover_cache::CoverCache>>,
+    actions: tokio::sync::mpsc::UnboundedSender<Action>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let (audio_used, audio_max) = audio_root
+            .and_then(|root| yesplaymusic_core::cache::TrackCache::open(root).ok())
+            .map(|cache| {
+                (
+                    cache.total_bytes().unwrap_or(0),
+                    cache.max_bytes().unwrap_or(0),
+                )
+            })
+            .unwrap_or((0, 0));
+        let (cover_used, cover_max) = covers
+            .map(|cache| (cache.used_bytes(), cache.budget_bytes()))
+            .unwrap_or((0, 0));
+        let _ = actions.send(Action::CacheUsageProbed(crate::action::CacheUsage {
+            audio_used,
+            audio_max,
+            cover_used,
+            cover_max,
+        }));
+    });
+}
+
 pub(crate) struct SettingsState {
     pub(crate) selected: usize,
     original: Option<Config>,
@@ -176,35 +203,7 @@ impl AppState {
     /// numbers next to the limit so the cap is a fact, not a promise.
     fn start_cache_usage_probe(&mut self, fx: &Effects) {
         self.settings.cache_usage = None;
-        let audio_root = fx.cache_root.clone();
-        let covers = fx.covers.clone();
-        let actions = fx.actions.clone();
-        tokio::spawn(async move {
-            let usage = tokio::task::spawn_blocking(move || {
-                let (audio_used, audio_max) = audio_root
-                    .and_then(|root| yesplaymusic_core::cache::TrackCache::open(root).ok())
-                    .map(|cache| {
-                        (
-                            cache.total_bytes().unwrap_or(0),
-                            cache.max_bytes().unwrap_or(0),
-                        )
-                    })
-                    .unwrap_or((0, 0));
-                let (cover_used, cover_max) = covers
-                    .map(|cache| (cache.used_bytes(), cache.budget_bytes()))
-                    .unwrap_or((0, 0));
-                crate::action::CacheUsage {
-                    audio_used,
-                    audio_max,
-                    cover_used,
-                    cover_max,
-                }
-            })
-            .await;
-            if let Ok(usage) = usage {
-                let _ = actions.send(Action::CacheUsageProbed(usage));
-            }
-        });
+        spawn_cache_usage_probe(fx.cache_root.clone(), fx.covers.clone(), fx.actions.clone());
     }
 
     pub(crate) fn apply_cache_usage(&mut self, usage: crate::action::CacheUsage) {
@@ -385,6 +384,10 @@ impl AppState {
                 self.config.intro_animation =
                     cycle(&IntroStyle::ALL, &self.config.intro_animation, delta);
                 self.start_intro_preview();
+                // A silent no-op reads as a broken setting; say why.
+                if self.config.intro_animation != IntroStyle::Off && self.intro_preview.is_none() {
+                    self.status = Some(i18n::t(Key::IntroPreviewTooSmall).to_owned());
+                }
             }
             SettingField::QueueBehavior => {
                 self.config.enter_replaces_queue = !self.config.enter_replaces_queue;
@@ -573,9 +576,20 @@ impl AppState {
         }
         self.intro_preview =
             crate::logo::sequence(style, bg, crate::logo::notes_pads(cols, rows), &spec).map(
-                |seq| super::IntroPreview {
-                    seq,
-                    started: std::time::Instant::now(),
+                |mut seq| {
+                    // The launch intro rests on the finished mark before the
+                    // handover; in settings that read as "done but frozen".
+                    // A short beat is enough to see the final frame.
+                    if self.view == crate::action::View::Settings {
+                        if let Some(last) = seq.frames.last_mut() {
+                            last.dur = last.dur.min(std::time::Duration::from_millis(250));
+                        }
+                    }
+                    super::IntroPreview {
+                        seq,
+                        started: std::time::Instant::now(),
+                        anchored: self.config.idle_art.is_none(),
+                    }
                 },
             );
     }
@@ -679,18 +693,26 @@ impl AppState {
             if let (Some(root), Some(limit_mib)) =
                 (fx.cache_root.clone(), self.config.cache_limit_mib)
             {
-                // Eviction scans the store; keep it off the UI thread.
-                std::thread::spawn(move || {
+                let covers = fx.covers.clone();
+                let actions = fx.actions.clone();
+                // Eviction scans the store; keep it off the UI thread. The
+                // audio store gets the same partition startup applies; the
+                // covers pick their new slice up on the next launch.
+                tokio::task::spawn_blocking(move || {
                     let updated =
-                        yesplaymusic_core::cache::TrackCache::open(root).and_then(|cache| {
+                        yesplaymusic_core::cache::TrackCache::open(&root).and_then(|cache| {
                             match limit_mib.checked_mul(1024 * 1024) {
-                                Some(max_bytes) => cache.set_max_bytes(max_bytes),
+                                Some(total) => {
+                                    cache.set_max_bytes(crate::cover_cache::audio_share(total))
+                                }
                                 None => Ok(()),
                             }
                         });
                     if let Err(error) = updated {
                         tracing::warn!(%error, "cache limit update failed");
                     }
+                    // Refresh the hint with what the store now reports.
+                    spawn_cache_usage_probe(Some(root), covers, actions);
                 });
             }
         }

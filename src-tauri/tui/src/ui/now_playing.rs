@@ -690,8 +690,12 @@ pub(super) fn draw_player_bar(
     let cover_cells = (content.height.saturating_mul(2), content.height);
     // The panels above are airy line borders, so sitting on the content
     // edge suits them; a solid block of art on that same column reads as
-    // pressed against the screen. Inset it to the panels' inner text column.
-    let cover_inset = super::PANEL_GAP_X;
+    // pressed against the screen. Inset it to the panels' inner text column:
+    // one border column plus one padding column. (Numerically equal to
+    // PANEL_GAP_X, but that names the gap BETWEEN panels — a coincidence,
+    // not a shared meaning.)
+    const BAR_COVER_INSET: u16 = 2;
+    let cover_inset = BAR_COVER_INSET;
     let cover_slot = cover_inset + cover_cells.0 + 2;
     const MIN_TEXT_COLUMN: u16 = 24;
     let (cover_area, right) = if expanded && content.width >= cover_slot + MIN_TEXT_COLUMN {
@@ -1076,13 +1080,19 @@ mod tests {
             .draw(|frame| super::draw_player_bar(frame, &mut state, area, &mut hits))
             .unwrap();
         let buffer = terminal.backend().buffer();
+        // Border + padding of the bordered panels above: their text starts
+        // two columns in, and the cover aligns with that text.
+        let theme = AppState::new(&Config::default()).theme;
+        let panel_text_x = crate::ui::panel_block(&theme, "t", None)
+            .inner(Rect::new(0, 0, 20, 5))
+            .x;
         let inked = |x: u16| (0..area.height).any(|y| buffer[(x, y)].symbol() != " ");
-        for x in 0..crate::ui::PANEL_GAP_X {
+        for x in 0..panel_text_x {
             assert!(!inked(x), "column {x} must stay clear of the cover");
         }
         assert!(
-            inked(crate::ui::PANEL_GAP_X),
-            "the cover must start right at the inner content column"
+            inked(panel_text_x),
+            "the cover must start right at the panels' text column"
         );
     }
 
