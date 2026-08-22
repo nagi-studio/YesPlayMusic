@@ -295,6 +295,20 @@ impl<'a> FrameCells<'a> {
             };
         }
         if top.is_none() && bottom.is_none() {
+            // A settled-empty cell can still carry faint art: the margin
+            // mask decides on the Half grid while the destination samples
+            // its own detail grid, and a hair-above-background corner the
+            // two disagree on (float rounding is even platform-dependent)
+            // would otherwise flip in on the handover frame. Deferring to
+            // the art everywhere the animation is done makes the final
+            // frame the art by construction.
+            if let Some(cell) = self.settled(col, row, None, None) {
+                return ComposedCell::Art {
+                    glyph: cell.glyph,
+                    fg: cell.fg,
+                    bg: cell.bg,
+                };
+            }
             return ComposedCell::Empty;
         }
         // Hand a finished cell to the renderer the destination surface uses.
@@ -1600,28 +1614,19 @@ mod tests {
             )
             .expect("idle art must render");
             let cells = FrameCells::new(&seq, last);
-            let backdrop = Color::Rgb(bg.0, bg.1, bg.2);
             for row in 0..14 {
                 for col in 0..28 {
                     let want = idle.cells[row * 28 + col];
                     // The notes style pads by (6, 6) sub-pixels: 6 columns
-                    // and 3 cell rows.
+                    // and 3 cell rows. Every cell of the settled mark —
+                    // masked margin included — must come from the art, so
+                    // no per-platform quantization can split the two.
                     match cells.cell(col + 6, row + 3) {
                         ComposedCell::Art { glyph, fg, bg } => assert_eq!(
                             (glyph, fg, bg),
                             (want.glyph, want.fg, want.bg),
                             "{detail} cell ({col},{row}) differs from the idle art"
                         ),
-                        // The masked margin composes to Empty; the idle art
-                        // paints those cells background-on-background — the
-                        // same picture, so the cell must be all-backdrop.
-                        ComposedCell::Empty => {
-                            let visible = |color: Color| color != backdrop && color != Color::Reset;
-                            assert!(
-                                !(visible(want.bg) || visible(want.fg) && want.glyph != ' '),
-                                "{detail} cell ({col},{row}) is empty but the idle art paints it"
-                            );
-                        }
                         _ => panic!("{detail} cell ({col},{row}) never settled onto the idle art"),
                     }
                 }
