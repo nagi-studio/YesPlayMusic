@@ -1,6 +1,6 @@
 [package]
 name = "yesplaymusic-tui"
-version = "0.9.3"
+version = "0.10.0"
 description = "ypm — YesPlayMusic in the terminal"
 edition = "2021"
 rust-version = "1.91"

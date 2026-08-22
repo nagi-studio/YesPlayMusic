@@ -1,6 +1,6 @@
 {
   "name": "yesplaymusic",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "private": true,
   "description": "A third party music player for Netease Music",
   "author": "Nagi Studio (fork of qier222/YesPlayMusic)",
