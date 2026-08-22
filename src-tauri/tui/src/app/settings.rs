@@ -692,22 +692,25 @@ impl AppState {
                 .cache_limit_mib
                 .and_then(|mib| mib.checked_mul(1024 * 1024))
             {
-                // The covers retarget synchronously: the trim scans a few
-                // hundred small files at most, and staying on this thread
-                // keeps the running budget ordered with the config even
-                // across rapid saves. It must not depend on the audio store
-                // — that one may have failed to open entirely.
+                // Retargeting is an atomic store — instant, so doing it on
+                // this thread makes budget order identical to UI event
+                // order across rapid saves. It must not depend on the audio
+                // store, which may have failed to open entirely.
                 if let Some(covers) = &fx.covers {
-                    if let Err(error) = covers.set_budget(crate::cover_cache::cover_budget(total)) {
-                        tracing::warn!(%error, "cover budget update failed");
-                    }
+                    covers.retarget_budget(crate::cover_cache::cover_budget(total));
                 }
                 let root = fx.cache_root.clone();
                 let covers = fx.covers.clone();
                 let actions = fx.actions.clone();
-                // Audio eviction scans the whole store; keep it off the UI
-                // thread. Same partition as startup.
+                // Eviction scans whole stores; keep it off the UI thread.
+                // The cover trim reads the atomic budget when it runs, so
+                // even a stale task trims to the latest value.
                 tokio::task::spawn_blocking(move || {
+                    if let Some(covers) = &covers {
+                        if let Err(error) = covers.trim_to_budget() {
+                            tracing::warn!(%error, "cover budget trim failed");
+                        }
+                    }
                     if let Some(root) = &root {
                         let updated =
                             yesplaymusic_core::cache::TrackCache::open(root).and_then(|cache| {

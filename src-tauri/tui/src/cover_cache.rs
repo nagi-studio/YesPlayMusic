@@ -315,9 +315,19 @@ impl CoverCache {
 
     /// Retarget the running instance when the user changes the total cache
     /// budget, trimming down right away if the new slice is smaller.
-    pub fn set_budget(&self, budget: u64) -> io::Result<()> {
+    /// Instant and lock-free, so the UI thread can call it on save: budget
+    /// order follows UI event order. The actual eviction runs later via
+    /// [`Self::trim_to_budget`] — and because the trim reads this atomic at
+    /// execution time rather than capturing a value, a stale background
+    /// trim still trims to the latest budget.
+    pub fn retarget_budget(&self, budget: u64) {
         self.original_limit
             .store(budget - PIXEL_LIMIT_BYTES, Ordering::Relaxed);
+    }
+
+    /// Evict down to the current budget; scans the store, so keep it off
+    /// the UI thread.
+    pub fn trim_to_budget(&self) -> io::Result<()> {
         self.with_lock(|| self.trim_originals())
     }
 
@@ -1051,10 +1061,11 @@ mod tests {
         backdate(&cache.pixel_path("a"), 10);
         backdate(&cache.pixel_path("b"), 20);
 
-        // Shrink the budget below the originals' current bytes: the running
-        // instance must trim now, not on the next launch.
+        // Shrink the budget below the originals' current bytes: retarget
+        // stores instantly, the trim that follows evicts to the new value.
         let original = fs::metadata(cache.original_path("keep")).unwrap().len();
-        cache.set_budget(PIXEL_LIMIT_BYTES + original - 1).unwrap();
+        cache.retarget_budget(PIXEL_LIMIT_BYTES + original - 1);
+        cache.trim_to_budget().unwrap();
         assert!(!cache.original_path("keep").exists());
     }
 
