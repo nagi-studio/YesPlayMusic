@@ -988,11 +988,19 @@ mod tests {
             .collect();
 
         // Whole-buffer equality: a mark taller than the clipped art rect
-        // would leave rows below it that vanish on this exact frame.
-        assert_eq!(
-            intro, dashboard,
-            "the intro's last frame must already be the dashboard's whole page"
-        );
+        // would leave rows below it that vanish on this exact frame. Compare
+        // cell-by-cell so a failure names the first differing position
+        // instead of dumping two thousand cells.
+        let width = usize::from(full.width);
+        for (i, (before, after)) in intro.iter().zip(dashboard.iter()).enumerate() {
+            assert_eq!(
+                before,
+                after,
+                "handover changes cell ({}, {})",
+                full.x + (i % width) as u16,
+                full.y + (i / width) as u16,
+            );
+        }
     }
 
     #[test]

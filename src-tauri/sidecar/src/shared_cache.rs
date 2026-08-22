@@ -828,7 +828,9 @@ mod tests {
         );
 
         let key = CacheKey::new(43, AudioQuality::Low128);
-        let mut lease = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        // Ten seconds, not two: a loaded Windows CI runner has blown the
+        // shorter window while the writer task was starved.
+        let mut lease = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if let Some(lease) = TrackCache::open(base_root.join("audio"))
                     .unwrap()
