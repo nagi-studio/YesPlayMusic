@@ -1540,6 +1540,13 @@ impl AppState {
         })
     }
 
+    /// Tests pin the terminal size instead of inheriting whatever console
+    /// the test runner happens to have (Windows CI has a real one).
+    #[cfg(test)]
+    pub(crate) fn set_terminal_size_for_test(&mut self, cols: u16, rows: u16) {
+        self.terminal_size = (cols, rows);
+    }
+
     fn pixel_style(&self) -> PixelStyle {
         PixelStyle {
             palette_mode: self.config.cover_palette,

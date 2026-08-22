@@ -338,13 +338,18 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
     let view_rows = (seq.sub_h / 2) as u16;
     let mark_cols = (seq.mark_side) as u16;
     let mark_rows = (seq.mark_side / 2) as u16;
+    // Signed: the mark must sit exactly on the anchor even when the flight
+    // pads reach past the top of the screen — clamping the origin to zero
+    // (saturating_sub) shifted the whole mark down a row whenever the pads
+    // outgrew the rect position, and the handover jumped. Off-screen pad
+    // cells simply clip.
     let (left, top, wordmark) = match anchor {
         // The sequence's mark sits pad columns/rows inside its viewport;
         // subtract them so the mark itself lands on the anchor rect. The
         // dashboard draws its own version hint, so no wordmark here.
         Some(rect) => (
-            rect.x.saturating_sub((view_cols - mark_cols) / 2),
-            rect.y.saturating_sub((view_rows - mark_rows) / 2),
+            i32::from(rect.x) - i32::from((view_cols - mark_cols) / 2),
+            i32::from(rect.y) - i32::from((view_rows - mark_rows) / 2),
             false,
         ),
         None => {
@@ -354,8 +359,8 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
             frame.render_widget(Clear, area);
             frame.render_widget(Block::new().style(Style::new().bg(theme_bg)), area);
             (
-                area.x + area.width.saturating_sub(view_cols) / 2,
-                area.y + area.height.saturating_sub(view_rows + 5) / 2 + 1,
+                i32::from(area.x + area.width.saturating_sub(view_cols) / 2),
+                i32::from(area.y + area.height.saturating_sub(view_rows + 5) / 2 + 1),
                 true,
             )
         }
@@ -363,7 +368,11 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
     let buf = frame.buffer_mut();
     for row in 0..view_rows {
         for col in 0..view_cols {
-            let at = (left + col, top + row);
+            let (at_x, at_y) = (left + i32::from(col), top + i32::from(row));
+            if at_x < 0 || at_y < 0 {
+                continue;
+            }
+            let at = (at_x as u16, at_y as u16);
             let composed = cells.cell(usize::from(col), usize::from(row));
             // Anchored, the mark must not outgrow the art rect the dashboard
             // will actually keep — on short terminals the layout clips the
@@ -427,8 +436,10 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
                 .bg(theme_bg)
                 .add_modifier(Modifier::BOLD)
         };
-        let centre = left + view_cols / 2;
-        let name_row = top + view_rows + 1;
+        // The wordmark only exists on the unanchored splash, whose origin
+        // is centred inside the area and therefore never negative.
+        let centre = (left + i32::from(view_cols / 2)).max(0) as u16;
+        let name_row = (top + i32::from(view_rows) + 1).max(0) as u16;
         let version = concat!("v", env!("CARGO_PKG_VERSION"));
         frame.render_widget(
             Paragraph::new("ypm").style(name_style),
@@ -457,7 +468,7 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
         let row = area.y + area.height.saturating_sub(2);
         // On a terminal that only just fits the mark this row would sit on
         // the animation itself; the hint is a nicety, the mark is the show.
-        if row < top + view_rows + 3 {
+        if i32::from(row) < top + i32::from(view_rows) + 3 {
             return;
         }
         frame.render_widget(
@@ -937,6 +948,10 @@ mod tests {
             ..Config::default()
         };
         let mut state = AppState::new(&config);
+        // A size whose flight pads reach above the art rect (Windows CI's
+        // real 120x30 console found this): the anchored mark must still sit
+        // exactly on the rect, not get pushed down by origin clamping.
+        state.set_terminal_size_for_test(120, 30);
         state.start_intro_preview();
         let backend = TestBackend::new(90, 24);
         let mut terminal = Terminal::new(backend).unwrap();
