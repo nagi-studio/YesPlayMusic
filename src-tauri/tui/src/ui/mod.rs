@@ -453,8 +453,13 @@ fn draw_intro_preview(frame: &mut Frame, state: &mut AppState, area: Rect, ancho
             i18n::intro_style_name(state.config.intro_animation),
             i18n::t(crate::i18n::Key::IntroPreviewKeysHint),
         );
-        let width = label.chars().count() as u16;
+        let width = crate::ui::text::display_width(&label) as u16;
         let row = area.y + area.height.saturating_sub(2);
+        // On a terminal that only just fits the mark this row would sit on
+        // the animation itself; the hint is a nicety, the mark is the show.
+        if row < top + view_rows + 3 {
+            return;
+        }
         frame.render_widget(
             Paragraph::new(label).style(Style::new().fg(state.theme.dim).bg(theme_bg)),
             Rect::new(

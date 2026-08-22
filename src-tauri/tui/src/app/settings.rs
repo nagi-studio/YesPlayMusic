@@ -111,17 +111,14 @@ fn spawn_cache_usage_probe(
     actions: tokio::sync::mpsc::UnboundedSender<Action>,
 ) {
     tokio::task::spawn_blocking(move || {
+        // A store that cannot answer is unreadable, not empty: cap 0 is the
+        // sentinel the display turns into "unreadable right now".
         let (audio_used, audio_max) = audio_root
             .and_then(|root| yesplaymusic_core::cache::TrackCache::open(root).ok())
-            .map(|cache| {
-                (
-                    cache.total_bytes().unwrap_or(0),
-                    cache.max_bytes().unwrap_or(0),
-                )
-            })
+            .and_then(|cache| Some((cache.total_bytes().ok()?, cache.max_bytes().ok()?)))
             .unwrap_or((0, 0));
         let (cover_used, cover_max) = covers
-            .map(|cache| (cache.used_bytes(), cache.budget_bytes()))
+            .and_then(|cache| Some((cache.used_bytes().ok()?, cache.budget_bytes())))
             .unwrap_or((0, 0));
         let _ = actions.send(Action::CacheUsageProbed(crate::action::CacheUsage {
             audio_used,
@@ -695,14 +692,22 @@ impl AppState {
             {
                 let covers = fx.covers.clone();
                 let actions = fx.actions.clone();
-                // Eviction scans the store; keep it off the UI thread. The
-                // audio store gets the same partition startup applies; the
-                // covers pick their new slice up on the next launch.
+                // Eviction scans the stores; keep it off the UI thread. The
+                // audio store gets the same partition startup applies, and
+                // the running cover cache retargets right away so a lowered
+                // total takes effect now, not on the next launch.
                 tokio::task::spawn_blocking(move || {
                     let updated =
                         yesplaymusic_core::cache::TrackCache::open(&root).and_then(|cache| {
                             match limit_mib.checked_mul(1024 * 1024) {
                                 Some(total) => {
+                                    if let Some(covers) = &covers {
+                                        if let Err(error) = covers
+                                            .set_budget(crate::cover_cache::cover_budget(total))
+                                        {
+                                            tracing::warn!(%error, "cover budget update failed");
+                                        }
+                                    }
                                     cache.set_max_bytes(crate::cover_cache::audio_share(total))
                                 }
                                 None => Ok(()),
@@ -711,7 +716,7 @@ impl AppState {
                     if let Err(error) = updated {
                         tracing::warn!(%error, "cache limit update failed");
                     }
-                    // Refresh the hint with what the store now reports.
+                    // Refresh the hint with what the stores now report.
                     spawn_cache_usage_probe(Some(root), covers, actions);
                 });
             }

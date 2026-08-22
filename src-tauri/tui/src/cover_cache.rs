@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::Color;
@@ -53,7 +54,9 @@ const PIXEL_ALGORITHM_REVISION: u32 = 3;
 #[derive(Debug)]
 pub struct CoverCache {
     root: PathBuf,
-    original_limit: u64,
+    /// Atomic so a settings change retargets the running instance instead
+    /// of waiting for the next launch.
+    original_limit: AtomicU64,
     pixel_limit: u64,
 }
 
@@ -74,10 +77,9 @@ impl CoverCache {
     /// [`cover_budget`]); the pixel layer's fixed cut comes out of it and
     /// the originals keep the rest.
     pub fn new(root: impl Into<PathBuf>, budget: u64) -> io::Result<Self> {
-        let original_limit = budget
-            .saturating_sub(PIXEL_LIMIT_BYTES)
-            .max(PIXEL_LIMIT_BYTES);
-        Self::new_with_limits(root.into(), original_limit, PIXEL_LIMIT_BYTES)
+        // Config parsing rejects totals whose cover slice could dip under
+        // the floor, so the budget always clears the pixel cut.
+        Self::new_with_limits(root.into(), budget - PIXEL_LIMIT_BYTES, PIXEL_LIMIT_BYTES)
     }
 
     #[cfg(test)]
@@ -99,7 +101,7 @@ impl CoverCache {
         fs::create_dir_all(root.join("pixel"))?;
         let cache = Self {
             root,
-            original_limit,
+            original_limit: AtomicU64::new(original_limit),
             pixel_limit,
         };
         cache.with_lock(|| {
@@ -123,13 +125,13 @@ impl CoverCache {
         validate_key(key)?;
         self.with_lock(|| {
             let path = self.original_path(key);
-            let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+            let mut file = match File::open(&path) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error),
             };
             let file_len = file.metadata()?.len();
-            if file_len > self.original_limit {
+            if file_len > self.original_limit.load(Ordering::Relaxed) {
                 drop(file);
                 remove_invalid(&path);
                 return Ok(None);
@@ -141,9 +143,8 @@ impl CoverCache {
                 remove_invalid(&path);
                 return Ok(None);
             };
-            // Best-effort: the refresh only sharpens LRU order, and a hit
-            // on a read-only cache is still a hit.
-            let _ = file.set_modified(SystemTime::now());
+            drop(file);
+            touch(&path);
             Ok(Some(payload))
         })
     }
@@ -158,7 +159,7 @@ impl CoverCache {
             .checked_add(u64::from(key_len))
             .and_then(|length| length.checked_add(payload_len))
             .ok_or_else(|| invalid_input("original cover is too large"))?;
-        if encoded_len > self.original_limit {
+        if encoded_len > self.original_limit.load(Ordering::Relaxed) {
             return Ok(());
         }
         self.with_lock(|| {
@@ -264,7 +265,7 @@ impl CoverCache {
 
     fn valid_original_at(&self, path: &Path, key: &str) -> io::Result<bool> {
         if fs::metadata(path)
-            .map(|metadata| metadata.len() > self.original_limit)
+            .map(|metadata| metadata.len() > self.original_limit.load(Ordering::Relaxed))
             .unwrap_or(false)
         {
             return Ok(false);
@@ -292,25 +293,42 @@ impl CoverCache {
 
     /// Bytes the cache holds on disk right now, across both layers. Reads
     /// the directory without the lock: the count is a settings-page display,
-    /// and a file landing mid-scan only shifts it by one entry.
-    pub fn used_bytes(&self) -> u64 {
-        [self.original_dir(), self.pixel_dir()]
-            .iter()
-            .filter_map(|dir| fs::read_dir(dir).ok())
-            .flatten()
-            .flatten()
-            .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("bin"))
-            .filter_map(|entry| entry.metadata().ok())
-            .map(|metadata| metadata.len())
-            .sum()
+    /// and a file landing mid-scan only shifts it by one entry. A directory
+    /// that cannot be listed is an error — reporting it as 0 bytes would be
+    /// indistinguishable from an empty cache.
+    pub fn used_bytes(&self) -> io::Result<u64> {
+        let mut total = 0;
+        for dir in [self.original_dir(), self.pixel_dir()] {
+            for entry in fs::read_dir(dir)? {
+                let Ok(entry) = entry else { continue };
+                if entry.path().extension().and_then(|e| e.to_str()) != Some("bin") {
+                    continue;
+                }
+                if let Ok(metadata) = entry.metadata() {
+                    total += metadata.len();
+                }
+            }
+        }
+        Ok(total)
     }
 
     pub fn budget_bytes(&self) -> u64 {
-        self.original_limit + self.pixel_limit
+        self.original_limit.load(Ordering::Relaxed) + self.pixel_limit
+    }
+
+    /// Retarget the running instance when the user changes the total cache
+    /// budget, trimming down right away if the new slice is smaller.
+    pub fn set_budget(&self, budget: u64) -> io::Result<()> {
+        self.original_limit
+            .store(budget - PIXEL_LIMIT_BYTES, Ordering::Relaxed);
+        self.with_lock(|| self.trim_originals())
     }
 
     fn trim_originals(&self) -> io::Result<()> {
-        Self::trim_directory(&self.original_dir(), self.original_limit)
+        Self::trim_directory(
+            &self.original_dir(),
+            self.original_limit.load(Ordering::Relaxed),
+        )
     }
 
     fn trim_pixels(&self) -> io::Result<()> {
@@ -600,6 +618,16 @@ fn finish_temporary(temporary: NamedTempFile, path: &Path) -> io::Result<()> {
         Ok(_) => Ok(()),
         Err(error) => Err(error.error),
     }
+}
+
+/// Best-effort read-marker: mtime drives LRU order, so a hit refreshes it.
+/// Reads stay read-only — on a read-only cache the refresh silently skips
+/// and the hit still counts.
+fn touch(path: &Path) {
+    let _ = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()));
 }
 
 fn remove_invalid(path: &Path) {
@@ -1015,6 +1043,25 @@ mod tests {
     }
 
     #[test]
+    fn a_budget_change_retargets_and_trims_the_running_instance() {
+        let directory = tempdir().unwrap();
+        let probe = CoverCache::with_limit(directory.path(), 1024).unwrap();
+        probe.put_pixel("a", &sample_cover()).unwrap();
+        let entry = pixel_entry_size(&probe, "a");
+        let cache = CoverCache::with_limits(directory.path(), 1024, entry * 3).unwrap();
+        cache.put_pixel("b", &sample_cover()).unwrap();
+        cache.put_original("keep", b"kkkk").unwrap();
+        backdate(&cache.pixel_path("a"), 10);
+        backdate(&cache.pixel_path("b"), 20);
+
+        // Shrink the budget below the originals' current bytes: the running
+        // instance must trim now, not on the next launch.
+        let original = fs::metadata(cache.original_path("keep")).unwrap().len();
+        cache.set_budget(PIXEL_LIMIT_BYTES + original - 1).unwrap();
+        assert!(!cache.original_path("keep").exists());
+    }
+
+    #[test]
     fn cover_budget_is_a_clamped_slice_of_the_whole_cache() {
         // 4% with a floor and a ceiling: small budgets stay usable, huge
         // budgets do not hoard gigabytes of artwork.
@@ -1030,7 +1077,10 @@ mod tests {
         let directory = tempdir().unwrap();
         let budget = 256 * 1024 * 1024_u64;
         let cache = CoverCache::new(directory.path(), budget).unwrap();
-        assert_eq!(cache.original_limit, budget - PIXEL_LIMIT_BYTES);
+        assert_eq!(
+            cache.original_limit.load(Ordering::Relaxed),
+            budget - PIXEL_LIMIT_BYTES
+        );
         assert_eq!(cache.pixel_limit, PIXEL_LIMIT_BYTES);
     }
 }
