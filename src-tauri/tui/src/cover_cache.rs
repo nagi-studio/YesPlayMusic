@@ -10,6 +10,9 @@ use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 use crate::pixel::{CoverDetail, CoverPalette, PixelCell, PixelCover};
 
 const ORIGINAL_LIMIT_BYTES: u64 = 128 * 1024 * 1024;
+/// Finished renders are ~14KB each, so this holds a few thousand — years
+/// of terminal sizes and themes — while staying bounded.
+const PIXEL_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 const ORIGINAL_MAGIC: &[u8; 8] = b"YPMCOVO1";
 const PIXEL_MAGIC: &[u8; 8] = b"YPMCOVP2";
 const ORIGINAL_HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -30,6 +33,7 @@ const PIXEL_ALGORITHM_REVISION: u32 = 3;
 pub struct CoverCache {
     root: PathBuf,
     original_limit: u64,
+    pixel_limit: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -46,24 +50,35 @@ pub(crate) struct PixelKeyInputs<'a> {
 
 impl CoverCache {
     pub fn new(root: impl Into<PathBuf>) -> io::Result<Self> {
-        Self::new_with_limit(root.into(), ORIGINAL_LIMIT_BYTES)
+        Self::new_with_limits(root.into(), ORIGINAL_LIMIT_BYTES, PIXEL_LIMIT_BYTES)
     }
 
     #[cfg(test)]
     fn with_limit(root: impl Into<PathBuf>, original_limit: u64) -> io::Result<Self> {
-        Self::new_with_limit(root.into(), original_limit)
+        Self::new_with_limits(root.into(), original_limit, PIXEL_LIMIT_BYTES)
     }
 
-    fn new_with_limit(root: PathBuf, original_limit: u64) -> io::Result<Self> {
+    #[cfg(test)]
+    fn with_limits(
+        root: impl Into<PathBuf>,
+        original_limit: u64,
+        pixel_limit: u64,
+    ) -> io::Result<Self> {
+        Self::new_with_limits(root.into(), original_limit, pixel_limit)
+    }
+
+    fn new_with_limits(root: PathBuf, original_limit: u64, pixel_limit: u64) -> io::Result<Self> {
         fs::create_dir_all(root.join("original"))?;
         fs::create_dir_all(root.join("pixel"))?;
         let cache = Self {
             root,
             original_limit,
+            pixel_limit,
         };
         cache.with_lock(|| {
             cache.clean_temporary_files();
             cache.trim_originals()?;
+            cache.trim_pixels()?;
             Ok(())
         })?;
         Ok(cache)
@@ -148,15 +163,22 @@ impl CoverCache {
                 remove_invalid(&path);
                 return Ok(None);
             }
-            let encoded = match fs::read(&path) {
-                Ok(encoded) => encoded,
+            let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+                Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error),
             };
+            let mut encoded = Vec::new();
+            file.read_to_end(&mut encoded)?;
             let Some(cover) = decode_pixel(&encoded, key) else {
+                drop(file);
                 remove_invalid(&path);
                 return Ok(None);
             };
+            // Refresh the entry so eviction is least-recently-USED: a render
+            // read every day must outlive one written yesterday and never
+            // looked at again.
+            file.set_modified(SystemTime::now())?;
             Ok(Some(cover))
         })
     }
@@ -206,7 +228,8 @@ impl CoverCache {
             temporary.write_all(key.as_bytes())?;
             temporary.write_all(&payload)?;
             finish_temporary(temporary, &path)?;
-            sync_directory(&self.pixel_dir())
+            sync_directory(&self.pixel_dir())?;
+            self.trim_pixels()
         })
     }
 
@@ -239,9 +262,19 @@ impl CoverCache {
     }
 
     fn trim_originals(&self) -> io::Result<()> {
+        Self::trim_directory(&self.original_dir(), self.original_limit)
+    }
+
+    fn trim_pixels(&self) -> io::Result<()> {
+        Self::trim_directory(&self.pixel_dir(), self.pixel_limit)
+    }
+
+    /// Oldest-mtime-first eviction down to `limit`. Reads refresh mtime, so
+    /// this is least-recently-used, not first-in-first-out.
+    fn trim_directory(directory: &Path, limit: u64) -> io::Result<()> {
         let mut entries = Vec::new();
         let mut total = 0_u64;
-        for entry in fs::read_dir(self.original_dir())? {
+        for entry in fs::read_dir(directory)? {
             let Ok(entry) = entry else { continue };
             let path = entry.path();
             if path.extension().and_then(|value| value.to_str()) != Some("bin") {
@@ -260,7 +293,7 @@ impl CoverCache {
         }
         entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         for (_, _, size, path) in entries {
-            if total <= self.original_limit {
+            if total <= limit {
                 break;
             }
             if fs::remove_file(path).is_ok() {
@@ -878,5 +911,58 @@ mod tests {
         assert!(!cache.original_path("a").exists());
         assert!(cache.original_path("b").exists());
         assert!(cache.original_path("c").exists());
+    }
+
+    /// One published pixel entry's size on disk, for sizing tight limits.
+    fn pixel_entry_size(cache: &CoverCache, key: &str) -> u64 {
+        fs::metadata(cache.pixel_path(key)).unwrap().len()
+    }
+
+    fn backdate(path: &std::path::Path, seconds: u64) {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn pixel_lru_evicts_the_oldest_render() {
+        let directory = tempdir().unwrap();
+        let probe = CoverCache::with_limit(directory.path(), 1024).unwrap();
+        probe.put_pixel("a", &sample_cover()).unwrap();
+        let entry = pixel_entry_size(&probe, "a");
+        // Re-open with room for exactly two renders.
+        let cache = CoverCache::with_limits(directory.path(), 1024, entry * 2).unwrap();
+        cache.put_pixel("b", &sample_cover()).unwrap();
+        backdate(&cache.pixel_path("a"), 10);
+        backdate(&cache.pixel_path("b"), 20);
+
+        cache.put_pixel("c", &sample_cover()).unwrap();
+
+        assert!(!cache.pixel_path("a").exists());
+        assert!(cache.pixel_path("b").exists());
+        assert!(cache.pixel_path("c").exists());
+    }
+
+    #[test]
+    fn a_pixel_read_saves_the_entry_from_eviction() {
+        let directory = tempdir().unwrap();
+        let probe = CoverCache::with_limit(directory.path(), 1024).unwrap();
+        probe.put_pixel("a", &sample_cover()).unwrap();
+        let entry = pixel_entry_size(&probe, "a");
+        let cache = CoverCache::with_limits(directory.path(), 1024, entry * 2).unwrap();
+        cache.put_pixel("b", &sample_cover()).unwrap();
+        backdate(&cache.pixel_path("a"), 10);
+        backdate(&cache.pixel_path("b"), 20);
+
+        // Reading "a" marks it used, so the trim drops "b" instead.
+        assert!(cache.get_pixel("a").unwrap().is_some());
+        cache.put_pixel("c", &sample_cover()).unwrap();
+
+        assert!(cache.pixel_path("a").exists());
+        assert!(!cache.pixel_path("b").exists());
+        assert!(cache.pixel_path("c").exists());
     }
 }
