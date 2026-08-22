@@ -414,7 +414,8 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 #                              # octant 显示方框时请切回 sextant
 # enter_replaces_queue = true # Enter：整列表成为队列；false = 只播这一首
 # idle_art = "~/my-art.png"   # 开屏像素画（png/jpg/webp/gif，自动像素化）
-# cache_limit_mib = 8192       # 全部缓存合计的上限（音频 + 封面）；GUI 设置里的共享缓存上限只管音频
+# cache_limit_mib = 8192       # 全部缓存合计的上限（音频 + 封面）；GUI 设置里的共享缓存上限只管音频，
+#                              # 两处都设置时，以后启动 / 保存的一方为准
 # pixel_scale = 1.0            # 像素细腻度：0.5 更复古块状，4.0 更细腻
 # title_accent = false         # 歌名使用主题强调色
 # spectrum_enabled = false     # v 键也可全局开关

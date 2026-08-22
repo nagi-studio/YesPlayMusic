@@ -283,6 +283,25 @@ impl CoverCache {
         }
     }
 
+    /// Bytes the cache holds on disk right now, across both layers. Reads
+    /// the directory without the lock: the count is a settings-page display,
+    /// and a file landing mid-scan only shifts it by one entry.
+    pub fn used_bytes(&self) -> u64 {
+        [self.original_dir(), self.pixel_dir()]
+            .iter()
+            .filter_map(|dir| fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("bin"))
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|metadata| metadata.len())
+            .sum()
+    }
+
+    pub fn budget_bytes(&self) -> u64 {
+        self.original_limit + self.pixel_limit
+    }
+
     fn trim_originals(&self) -> io::Result<()> {
         Self::trim_directory(&self.original_dir(), self.original_limit)
     }

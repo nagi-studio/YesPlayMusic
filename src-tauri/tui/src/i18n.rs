@@ -279,6 +279,37 @@ pub fn t_spectrum_sensitivity(level: crate::config::SpectrumSensitivity) -> &'st
     }
 }
 
+/// "6.6G" / "135M" — coarse on purpose, it labels a settings row.
+fn human_bytes(bytes: u64) -> String {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= GIB {
+        format!("{:.1}G", bytes as f64 / GIB as f64)
+    } else {
+        format!("{}M", bytes / MIB)
+    }
+}
+
+/// The cache-limit hint: live usage against each store's slice of the
+/// budget, plus where the GUI's own knob reaches.
+pub fn t_cache_usage(usage: crate::action::CacheUsage) -> String {
+    let audio_used = human_bytes(usage.audio_used);
+    let audio_max = human_bytes(usage.audio_max);
+    let cover_used = human_bytes(usage.cover_used);
+    let cover_max = human_bytes(usage.cover_max);
+    match language() {
+        Lang::Zh => format!(
+            "音频 {audio_used} / {audio_max} · 封面 {cover_used} / {cover_max}；上限为两者合计，GUI 的共享缓存设置只管音频"
+        ),
+        Lang::En => format!(
+            "audio {audio_used} / {audio_max} · covers {cover_used} / {cover_max}; the limit covers both, the GUI knob only sizes audio"
+        ),
+        Lang::Ja => format!(
+            "音声 {audio_used} / {audio_max} · カバー {cover_used} / {cover_max}；上限は両方の合計、GUI 側の設定は音声のみ"
+        ),
+    }
+}
+
 pub fn t_spectrum_style(kind: SpectrumKind) -> &'static str {
     match (language(), kind) {
         (Lang::Zh, SpectrumKind::Blocks) => "经典块条",

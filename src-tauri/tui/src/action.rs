@@ -71,6 +71,15 @@ pub enum RestoreFailure {
     Offline,
 }
 
+/// A snapshot of what the caches hold versus their caps, for settings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CacheUsage {
+    pub audio_used: u64,
+    pub audio_max: u64,
+    pub cover_used: u64,
+    pub cover_max: u64,
+}
+
 #[derive(Debug)]
 pub enum Action {
     UiTick,
@@ -121,6 +130,7 @@ pub enum Action {
     SaveSettings,
     CancelSettings,
     NerdFontProbeFinished(crate::nerd_font::Status),
+    CacheUsageProbed(CacheUsage),
     /// Open the artist or album page a click landed on. The target is the
     /// one that was on screen, not whatever is playing when this is reduced.
     OpenPage(crate::ui::PageLink),

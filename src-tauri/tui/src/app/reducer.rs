@@ -453,6 +453,7 @@ impl AppState {
             Action::SaveSettings => self.save_settings(fx),
             Action::CancelSettings => self.cancel_settings(fx),
             Action::NerdFontProbeFinished(status) => self.apply_nerd_font_probe(status),
+            Action::CacheUsageProbed(usage) => self.apply_cache_usage(usage),
             Action::UpdateAvailable(tag) => {
                 // Also surface as a status toast: a late-arriving result
                 // must stay visible after the dashboard has been left.

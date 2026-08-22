@@ -98,8 +98,17 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
         Some(SettingField::PixelDetail) => Key::PixelDetailHint,
         _ => Key::SettingsHint,
     };
+    // The cache row's hint is live data, not copy: what each store holds
+    // against its slice of the budget.
+    let hint = match SettingField::ALL.get(state.settings.selected) {
+        Some(SettingField::CacheLimit) => match state.settings.cache_usage {
+            Some(usage) => i18n::t_cache_usage(usage),
+            None => i18n::t(hint).to_owned(),
+        },
+        _ => i18n::t(hint).to_owned(),
+    };
     frame.render_widget(
-        Paragraph::new(i18n::t(hint)).style(Style::new().fg(theme.dim)),
+        Paragraph::new(hint).style(Style::new().fg(theme.dim)),
         hint_area,
     );
 
@@ -643,5 +652,37 @@ mod tests {
             let cell = &buffer[(x, nested_top_y)];
             cell.fg == state.theme.accent && !matches!(cell.symbol(), " " | "─" | "╭" | "╮")
         }));
+    }
+
+    #[test]
+    fn the_cache_row_hint_shows_live_usage_once_probed() {
+        let mut state = AppState::new(&Config::default());
+        state.view = crate::action::View::Settings;
+        let cache_row = SettingField::ALL
+            .iter()
+            .position(|field| *field == SettingField::CacheLimit)
+            .unwrap();
+        state.settings.selected = cache_row;
+        state.settings.cache_usage = Some(crate::action::CacheUsage {
+            audio_used: 6 * 1024 * 1024 * 1024,
+            audio_max: 15 * 1024 * 1024 * 1024,
+            cover_used: 135 * 1024 * 1024,
+            cover_max: 655 * 1024 * 1024,
+        });
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Hits::default();
+        terminal
+            .draw(|frame| draw(frame, &mut state, frame.area(), &mut hits))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(text.contains("6.0G"), "audio usage must be on screen");
+        assert!(text.contains("135M"), "cover usage must be on screen");
     }
 }

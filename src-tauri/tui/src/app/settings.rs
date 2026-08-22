@@ -111,6 +111,7 @@ pub(crate) struct SettingsState {
     original_theme: Option<Theme>,
     return_view: View,
     nerd_font_probe: NerdFontProbe,
+    pub(crate) cache_usage: Option<crate::action::CacheUsage>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -129,6 +130,7 @@ impl Default for SettingsState {
             original_theme: None,
             return_view: View::NowPlaying,
             nerd_font_probe: NerdFontProbe::Unchecked,
+            cache_usage: None,
         }
     }
 }
@@ -167,6 +169,46 @@ impl AppState {
         self.zen = false;
         self.status = None;
         self.start_nerd_font_probe(fx);
+        self.start_cache_usage_probe(fx);
+    }
+
+    /// Snapshot both stores off the main thread; the settings page shows the
+    /// numbers next to the limit so the cap is a fact, not a promise.
+    fn start_cache_usage_probe(&mut self, fx: &Effects) {
+        self.settings.cache_usage = None;
+        let audio_root = fx.cache_root.clone();
+        let covers = fx.covers.clone();
+        let actions = fx.actions.clone();
+        tokio::spawn(async move {
+            let usage = tokio::task::spawn_blocking(move || {
+                let (audio_used, audio_max) = audio_root
+                    .and_then(|root| yesplaymusic_core::cache::TrackCache::open(root).ok())
+                    .map(|cache| {
+                        (
+                            cache.total_bytes().unwrap_or(0),
+                            cache.max_bytes().unwrap_or(0),
+                        )
+                    })
+                    .unwrap_or((0, 0));
+                let (cover_used, cover_max) = covers
+                    .map(|cache| (cache.used_bytes(), cache.budget_bytes()))
+                    .unwrap_or((0, 0));
+                crate::action::CacheUsage {
+                    audio_used,
+                    audio_max,
+                    cover_used,
+                    cover_max,
+                }
+            })
+            .await;
+            if let Ok(usage) = usage {
+                let _ = actions.send(Action::CacheUsageProbed(usage));
+            }
+        });
+    }
+
+    pub(crate) fn apply_cache_usage(&mut self, usage: crate::action::CacheUsage) {
+        self.settings.cache_usage = Some(usage);
     }
 
     fn start_nerd_font_probe(&mut self, fx: &Effects) {
