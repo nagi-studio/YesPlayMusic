@@ -390,13 +390,21 @@ fn query_graphics_picker(background: Color) -> Option<Picker> {
     Some(picker)
 }
 
-fn initialize_audio_cache(config: &Config) -> Option<std::path::PathBuf> {
+/// Opens the audio cache and returns its root plus the user's whole cache
+/// budget in bytes. `cache_limit_mib` is the budget for ALL caches: covers
+/// take their slice (see [`crate::cover_cache::cover_budget`]) and the
+/// audio store keeps the rest.
+fn initialize_audio_cache(config: &Config) -> (Option<std::path::PathBuf>, u64) {
     let root = config::cache_dir().join("audio");
     let cache = match TrackCache::open(&root) {
         Ok(cache) => cache,
         Err(error) => {
             tracing::warn!(%error, "audio cache unavailable");
-            return None;
+            let total = config
+                .cache_limit_mib
+                .and_then(|mib| mib.checked_mul(1024 * 1024))
+                .unwrap_or(yesplaymusic_core::cache::DEFAULT_MAX_BYTES);
+            return (None, total);
         }
     };
     // Startup maintenance: per-operation opens stay cheap, this one sweep
@@ -405,19 +413,26 @@ fn initialize_audio_cache(config: &Config) -> Option<std::path::PathBuf> {
         tracing::warn!(%error, "audio cache maintenance failed");
     }
     if let Some(limit_mib) = config.cache_limit_mib {
-        let Some(max_bytes) = limit_mib.checked_mul(1024 * 1024) else {
-            tracing::warn!("audio cache limit is too large");
-            return Some(root);
-        };
-        if let Err(error) = cache.set_max_bytes(max_bytes) {
-            tracing::warn!(%error, "audio cache policy update failed");
+        if let Some(total) = limit_mib.checked_mul(1024 * 1024) {
+            let audio_bytes = total.saturating_sub(crate::cover_cache::cover_budget(total));
+            if let Err(error) = cache.set_max_bytes(audio_bytes) {
+                tracing::warn!(%error, "audio cache policy update failed");
+            }
+            return (Some(root), total);
         }
+        tracing::warn!("audio cache limit is too large");
     }
-    Some(root)
+    // No explicit budget: the audio store keeps its stored policy, and the
+    // covers scale off that as the closest thing to a total the user meant.
+    let total = cache
+        .max_bytes()
+        .unwrap_or(yesplaymusic_core::cache::DEFAULT_MAX_BYTES);
+    (Some(root), total)
 }
 
-fn initialize_cover_cache() -> Option<Arc<CoverCache>> {
-    match CoverCache::new(config::cache_dir().join("covers")) {
+fn initialize_cover_cache(total_cache_bytes: u64) -> Option<Arc<CoverCache>> {
+    let budget = crate::cover_cache::cover_budget(total_cache_bytes);
+    match CoverCache::new(config::cache_dir().join("covers"), budget) {
         Ok(cache) => Some(Arc::new(cache)),
         Err(error) => {
             tracing::warn!(%error, "cover cache unavailable");
@@ -2832,6 +2847,7 @@ async fn event_loop(
         config.quality,
         config.unm_enabled,
     ));
+    let (cache_root, total_cache_bytes) = initialize_audio_cache(config);
     let fx = Effects {
         player,
         ncm,
@@ -2839,8 +2855,8 @@ async fn event_loop(
             config::cache_dir().join("library"),
         )),
         actions: actions_tx,
-        cache_root: initialize_audio_cache(config),
-        covers: initialize_cover_cache(),
+        cache_root,
+        covers: initialize_cover_cache(total_cache_bytes),
         config_path: config::config_dir().join("config.toml"),
     };
     #[cfg(unix)]

@@ -566,7 +566,8 @@ async fn a_hot_selected_cover_replaces_the_placeholder_synchronously() {
 #[tokio::test]
 async fn an_l2_hit_is_loaded_before_the_network_debounce() {
     let directory = tempfile::tempdir().unwrap();
-    let covers = Arc::new(CoverCache::new(directory.path().join("covers")).unwrap());
+    let covers =
+        Arc::new(CoverCache::new(directory.path().join("covers"), 256 * 1024 * 1024).unwrap());
     let (player, _events) = player::spawn(tokio::runtime::Handle::current());
     let (actions, mut receiver) = mpsc::unbounded_channel();
     let fx = Effects {
@@ -839,7 +840,8 @@ fn hidden_preview_rejects_a_stale_original_resize_after_it_returns() {
 #[tokio::test]
 async fn a_prefetched_pixel_warms_the_next_selection() {
     let directory = tempfile::tempdir().unwrap();
-    let covers = Arc::new(CoverCache::new(directory.path().join("covers")).unwrap());
+    let covers =
+        Arc::new(CoverCache::new(directory.path().join("covers"), 256 * 1024 * 1024).unwrap());
     let (player, _events) = player::spawn(tokio::runtime::Handle::current());
     let (actions, mut receiver) = mpsc::unbounded_channel();
     let fx = Effects {

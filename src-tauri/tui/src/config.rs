@@ -182,7 +182,11 @@ pub struct Config {
     /// Swap paired themes to their light/dark counterpart; Auto follows
     /// the terminal background. Themes without a pair ignore this.
     pub theme_mode: ThemeMode,
-    /// Explicit ypm process cache cap in MiB. None keeps the database value.
+    /// The whole cache budget in MiB — audio plus covers. Covers take a
+    /// small slice (see `cover_cache::cover_budget`) and the shared audio
+    /// store keeps the rest, so the number the user sets is what the cache
+    /// directory can actually grow to. None keeps the stored audio policy
+    /// and scales the covers off it.
     pub cache_limit_mib: Option<u64>,
     /// Enter on a list: true = the list becomes the queue from that song
     /// (desktop/NCM semantics), false = play just that one song.
@@ -410,7 +414,7 @@ const TEMPLATE: &str = r#"# ypm 配置 — 常用项也可在 ypm 设置页修�
 #                              # octant 显示方框时请切回 sextant
 # enter_replaces_queue = true # Enter：整列表成为队列；false = 只播这一首
 # idle_art = "~/my-art.png"   # 开屏像素画（png/jpg/webp/gif，自动像素化）
-# cache_limit_mib = 8192       # 仅显式设置时更新 ypm 进程共享的上限
+# cache_limit_mib = 8192       # 全部缓存合计的上限（音频 + 封面）；GUI 设置里的共享缓存上限只管音频
 # pixel_scale = 1.0            # 像素细腻度：0.5 更复古块状，4.0 更细腻
 # title_accent = false         # 歌名使用主题强调色
 # spectrum_enabled = false     # v 键也可全局开关

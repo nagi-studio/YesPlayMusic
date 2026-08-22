@@ -9,10 +9,26 @@ use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 
 use crate::pixel::{CoverDetail, CoverPalette, PixelCell, PixelCover};
 
-const ORIGINAL_LIMIT_BYTES: u64 = 128 * 1024 * 1024;
 /// Finished renders are ~14KB each, so this holds a few thousand — years
 /// of terminal sizes and themes — while staying bounded.
 const PIXEL_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The covers' slice of the shared cache budget. Estimated from what the
+/// layers actually store: a cover original runs ~675KB against ~27MB for a
+/// lossless track (~2.5% per song), widened for browsing — previews fetch
+/// covers for songs never played — and for lossy tracks, which shift the
+/// per-song ratio up. The floor keeps small budgets useful; the ceiling
+/// stops terabyte budgets from hoarding gigabytes of artwork.
+const COVER_BUDGET_PERCENT: u64 = 4;
+const COVER_BUDGET_FLOOR: u64 = 256 * 1024 * 1024;
+const COVER_BUDGET_CEILING: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The covers' share of `total_cache_bytes`, the user's whole cache budget.
+pub fn cover_budget(total_cache_bytes: u64) -> u64 {
+    (total_cache_bytes / 100)
+        .saturating_mul(COVER_BUDGET_PERCENT)
+        .clamp(COVER_BUDGET_FLOOR, COVER_BUDGET_CEILING)
+}
 const ORIGINAL_MAGIC: &[u8; 8] = b"YPMCOVO1";
 const PIXEL_MAGIC: &[u8; 8] = b"YPMCOVP2";
 const ORIGINAL_HEADER_LEN: usize = 8 + 4 + 8 + 8;
@@ -49,8 +65,14 @@ pub(crate) struct PixelKeyInputs<'a> {
 }
 
 impl CoverCache {
-    pub fn new(root: impl Into<PathBuf>) -> io::Result<Self> {
-        Self::new_with_limits(root.into(), ORIGINAL_LIMIT_BYTES, PIXEL_LIMIT_BYTES)
+    /// `budget` is the covers' slice of the shared cache budget (see
+    /// [`cover_budget`]); the pixel layer's fixed cut comes out of it and
+    /// the originals keep the rest.
+    pub fn new(root: impl Into<PathBuf>, budget: u64) -> io::Result<Self> {
+        let original_limit = budget
+            .saturating_sub(PIXEL_LIMIT_BYTES)
+            .max(PIXEL_LIMIT_BYTES);
+        Self::new_with_limits(root.into(), original_limit, PIXEL_LIMIT_BYTES)
     }
 
     #[cfg(test)]
@@ -964,5 +986,28 @@ mod tests {
         assert!(cache.pixel_path("a").exists());
         assert!(!cache.pixel_path("b").exists());
         assert!(cache.pixel_path("c").exists());
+    }
+
+    #[test]
+    fn cover_budget_is_a_clamped_slice_of_the_whole_cache() {
+        // 4% with a floor and a ceiling: small budgets stay usable, huge
+        // budgets do not hoard gigabytes of artwork.
+        let gib = 1024 * 1024 * 1024_u64;
+        assert_eq!(cover_budget(16 * gib), 16 * gib / 100 * 4);
+        assert_eq!(cover_budget(gib), COVER_BUDGET_FLOOR);
+        assert_eq!(cover_budget(0), COVER_BUDGET_FLOOR);
+        assert_eq!(cover_budget(100 * gib), COVER_BUDGET_CEILING);
+    }
+
+    #[test]
+    fn the_budget_splits_between_originals_and_the_pixel_slice() {
+        let directory = tempdir().unwrap();
+        let budget = 256 * 1024 * 1024_u64;
+        let cache = CoverCache::new(directory.path(), budget).unwrap();
+        assert_eq!(cache.original_limit, budget - PIXEL_LIMIT_BYTES);
+        assert_eq!(cache.pixel_limit, PIXEL_LIMIT_BYTES);
+        // A degenerate budget still leaves both layers alive.
+        let tiny = CoverCache::new(directory.path().join("tiny"), 0).unwrap();
+        assert_eq!(tiny.original_limit, PIXEL_LIMIT_BYTES);
     }
 }
