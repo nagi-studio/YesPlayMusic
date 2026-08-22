@@ -942,14 +942,24 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut hits = Hits::default();
 
-        // The final frame of the intro, still drawn by the overlay. The
-        // resting frame lasts 900ms; land 200ms before expiry so a slow CI
-        // runner cannot burn through the margin between this write and the
-        // elapsed() check inside draw (1ms flaked on Windows).
+        // The final frame of the intro, still drawn by the overlay. Racing
+        // the real 900ms resting frame is not deterministic: a starved CI
+        // thread (2-core Windows runners under a parallel debug test run)
+        // can lose hundreds of milliseconds between this write and the
+        // elapsed() check inside draw — 1ms and 200ms margins both flaked.
+        // Stretch the resting frame to an hour and land just inside it, so
+        // no scheduling delay can expire the preview mid-test.
         {
             let preview = state.intro_preview.as_mut().expect("preview must start");
-            preview.started = std::time::Instant::now() - preview.seq.total()
-                + std::time::Duration::from_millis(200);
+            let frames = &mut preview.seq.frames;
+            let head: std::time::Duration = frames[..frames.len() - 1]
+                .iter()
+                .map(|frame| frame.dur)
+                .sum();
+            frames.last_mut().expect("sequences are never empty").dur =
+                std::time::Duration::from_secs(3600);
+            preview.started =
+                std::time::Instant::now() - head - std::time::Duration::from_millis(10);
         }
         terminal
             .draw(|frame| draw(frame, &mut state, &mut hits))
