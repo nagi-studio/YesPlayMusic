@@ -193,22 +193,19 @@ impl CoverCache {
                 remove_invalid(&path);
                 return Ok(None);
             }
-            let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
-                Ok(file) => file,
+            let encoded = match fs::read(&path) {
+                Ok(encoded) => encoded,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error),
             };
-            let mut encoded = Vec::new();
-            file.read_to_end(&mut encoded)?;
             let Some(cover) = decode_pixel(&encoded, key) else {
-                drop(file);
                 remove_invalid(&path);
                 return Ok(None);
             };
             // Refresh the entry so eviction is least-recently-USED: a render
             // read every day must outlive one written yesterday and never
             // looked at again.
-            let _ = file.set_modified(SystemTime::now());
+            touch(&path);
             Ok(Some(cover))
         })
     }

@@ -687,37 +687,38 @@ impl AppState {
             self.prefetched = None;
         }
         if before.cache_limit_mib != self.config.cache_limit_mib {
-            if let (Some(root), Some(limit_mib)) =
-                (fx.cache_root.clone(), self.config.cache_limit_mib)
+            if let Some(total) = self
+                .config
+                .cache_limit_mib
+                .and_then(|mib| mib.checked_mul(1024 * 1024))
             {
+                // The covers retarget synchronously: the trim scans a few
+                // hundred small files at most, and staying on this thread
+                // keeps the running budget ordered with the config even
+                // across rapid saves. It must not depend on the audio store
+                // — that one may have failed to open entirely.
+                if let Some(covers) = &fx.covers {
+                    if let Err(error) = covers.set_budget(crate::cover_cache::cover_budget(total)) {
+                        tracing::warn!(%error, "cover budget update failed");
+                    }
+                }
+                let root = fx.cache_root.clone();
                 let covers = fx.covers.clone();
                 let actions = fx.actions.clone();
-                // Eviction scans the stores; keep it off the UI thread. The
-                // audio store gets the same partition startup applies, and
-                // the running cover cache retargets right away so a lowered
-                // total takes effect now, not on the next launch.
+                // Audio eviction scans the whole store; keep it off the UI
+                // thread. Same partition as startup.
                 tokio::task::spawn_blocking(move || {
-                    let updated =
-                        yesplaymusic_core::cache::TrackCache::open(&root).and_then(|cache| {
-                            match limit_mib.checked_mul(1024 * 1024) {
-                                Some(total) => {
-                                    if let Some(covers) = &covers {
-                                        if let Err(error) = covers
-                                            .set_budget(crate::cover_cache::cover_budget(total))
-                                        {
-                                            tracing::warn!(%error, "cover budget update failed");
-                                        }
-                                    }
-                                    cache.set_max_bytes(crate::cover_cache::audio_share(total))
-                                }
-                                None => Ok(()),
-                            }
-                        });
-                    if let Err(error) = updated {
-                        tracing::warn!(%error, "cache limit update failed");
+                    if let Some(root) = &root {
+                        let updated =
+                            yesplaymusic_core::cache::TrackCache::open(root).and_then(|cache| {
+                                cache.set_max_bytes(crate::cover_cache::audio_share(total))
+                            });
+                        if let Err(error) = updated {
+                            tracing::warn!(%error, "cache limit update failed");
+                        }
                     }
                     // Refresh the hint with what the stores now report.
-                    spawn_cache_usage_probe(Some(root), covers, actions);
+                    spawn_cache_usage_probe(root, covers, actions);
                 });
             }
         }
