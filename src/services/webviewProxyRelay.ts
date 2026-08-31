@@ -224,15 +224,17 @@ function forwardHttpRequest(
     return;
   }
 
+  const upstreamHost = unbracketHost(upstream.hostname);
   pipeHttpRequest(
     request,
     response,
     {
-      hostname: unbracketHost(upstream.hostname),
+      hostname: upstreamHost,
       port: proxyPort(upstream),
       method: request.method,
       path: target.upstreamPath,
       headers,
+      ...(net.isIP(upstreamHost) === 0 ? { servername: upstreamHost } : {}),
       ...(upstreamTlsCa === undefined ? {} : { ca: upstreamTlsCa }),
     },
     upstream.protocol === 'https:'
