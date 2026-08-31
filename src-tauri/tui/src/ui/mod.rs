@@ -34,8 +34,8 @@ pub(crate) const MAX_LIST_CONTENT_WIDTH: u16 = 140;
 
 pub(crate) const fn max_content_width(view: View) -> u16 {
     match view {
-        View::Library | View::Search | View::Queue => MAX_LIST_CONTENT_WIDTH,
-        View::NowPlaying | View::Login | View::Settings => MAX_CONTENT_WIDTH,
+        View::Library | View::Search | View::Queue | View::Settings => MAX_LIST_CONTENT_WIDTH,
+        View::NowPlaying | View::Login => MAX_CONTENT_WIDTH,
     }
 }
 /// The navigation bar occupies one terminal row.
@@ -903,7 +903,8 @@ mod tests {
     use super::{
         centered_content_for, draw, draw_help, draw_hints, draw_quit_confirm, filter_title,
         footer_hint_spans, footer_hints, max_content_width, panel_block, text, Hits, FOOTER_HEIGHT,
-        HEADER_HEIGHT, MAX_CONTENT_WIDTH, PANEL_GAP_Y, QUIT_MODAL_HEIGHT, QUIT_MODAL_WIDTH,
+        HEADER_HEIGHT, MAX_CONTENT_WIDTH, MAX_LIST_CONTENT_WIDTH, PANEL_GAP_Y, QUIT_MODAL_HEIGHT,
+        QUIT_MODAL_WIDTH,
     };
     use crate::action::View;
     use crate::api::{ArtistHit, SearchChannel, SongRow};
@@ -1079,6 +1080,20 @@ mod tests {
             .collect::<String>();
         assert!(!rendered.contains("YOASOBI"));
         assert!(hits.play.is_empty());
+    }
+
+    #[test]
+    fn browsing_views_share_one_player_bar_measure_on_wide_terminals() {
+        let area = Rect::new(0, 0, 200, 40);
+        let expected = centered_content_for(area, MAX_LIST_CONTENT_WIDTH);
+
+        for view in [View::Library, View::Search, View::Queue, View::Settings] {
+            assert_eq!(
+                centered_content_for(area, max_content_width(view)),
+                expected,
+                "{view:?} changed the shared player-bar width",
+            );
+        }
     }
 
     fn rect_text(buffer: &Buffer, area: Rect) -> String {
