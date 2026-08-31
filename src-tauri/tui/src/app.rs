@@ -1238,6 +1238,14 @@ impl AppState {
             title: self.now.as_ref().map(|now| now.title.clone()),
             artist: self.now.as_ref().map(|now| now.artist.clone()),
             album: self.now.as_ref().map(|now| now.album.clone()),
+            cover_url: self.now.as_ref().and_then(|_| {
+                self.active_row
+                    .as_ref()
+                    .and_then(|row| row.pic_url.as_deref())
+                    .and_then(remote::status_cover_url)
+            }),
+            seekable: self.now.is_some() && self.duration.is_some(),
+            icon_style: self.config.icons,
             position_ms: self.position.as_millis() as u64,
             duration_ms: self.duration.map(|duration| duration.as_millis() as u64),
         }

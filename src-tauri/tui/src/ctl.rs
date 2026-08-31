@@ -65,11 +65,12 @@ pub async fn run(command: Command, forced: Option<Target>, json: bool) -> Result
         );
     } else {
         let done = match command {
-            Command::Pause => "已暂停",
-            Command::Resume => "已继续播放",
-            Command::Toggle => "已切换播放/暂停",
-            Command::Next => "已切到下一首",
-            Command::Prev => "已切到上一首",
+            Command::Pause => "已暂停".to_owned(),
+            Command::Resume => "已继续播放".to_owned(),
+            Command::Toggle => "已切换播放/暂停".to_owned(),
+            Command::Next => "已切到下一首".to_owned(),
+            Command::Prev => "已切到上一首".to_owned(),
+            Command::Seek { position_ms } => format!("已跳转到 {}", clock(position_ms)),
             Command::Status => unreachable!(),
         };
         println!("{done}（{}）", target.label());
@@ -190,6 +191,8 @@ fn snapshot_from_gui(player: &Value) -> Snapshot {
                 .join(" / ")
         })
         .filter(|joined| !joined.is_empty());
+    let album = field(["al", "album"]);
+    let duration_ms = field(["dt", "duration"]).and_then(Value::as_u64);
     Snapshot {
         playing: player
             .get("playing")
@@ -200,16 +203,22 @@ fn snapshot_from_gui(player: &Value) -> Snapshot {
             .and_then(Value::as_str)
             .map(str::to_owned),
         artist,
-        album: field(["al", "album"])
+        album: album
             .and_then(|album| album.get("name"))
             .and_then(Value::as_str)
             .map(str::to_owned),
+        cover_url: album
+            .and_then(|album| album.get("picUrl"))
+            .and_then(Value::as_str)
+            .and_then(remote::status_cover_url),
+        seekable: track.is_some() && duration_ms.is_some(),
+        icon_style: crate::config::IconStyle::Unicode,
         position_ms: (player
             .get("progress")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
             * 1000.0) as u64,
-        duration_ms: field(["dt", "duration"]).and_then(Value::as_u64),
+        duration_ms,
     }
 }
 
@@ -223,7 +232,10 @@ mod tests {
             "currentTrack": {
                 "name": "海阔天空",
                 "ar": [{ "name": "Beyond" }],
-                "al": { "name": "乐与怒" },
+                "al": {
+                    "name": "乐与怒",
+                    "picUrl": "http://p1.music.126.net/cover.jpg?token=secret"
+                },
                 "dt": 326000
             },
             "progress": 12.5,
@@ -233,9 +245,42 @@ mod tests {
         assert_eq!(snapshot.title.as_deref(), Some("海阔天空"));
         assert_eq!(snapshot.artist.as_deref(), Some("Beyond"));
         assert_eq!(snapshot.album.as_deref(), Some("乐与怒"));
+        assert_eq!(
+            snapshot.cover_url.as_deref(),
+            Some("https://p1.music.126.net/cover.jpg?param=64y64")
+        );
         assert_eq!(snapshot.position_ms, 12500);
         assert_eq!(snapshot.duration_ms, Some(326000));
         assert!(snapshot.playing);
+    }
+
+    #[test]
+    fn gui_personal_fm_cover_maps_to_the_same_snapshot_shape() {
+        let player = serde_json::json!({
+            "currentTrack": {
+                "name": "夜曲",
+                "artists": [{ "name": "周杰伦" }],
+                "album": {
+                    "name": "十一月的萧邦",
+                    "picUrl": "https://p2.music.126.net/fm.jpg?param=512y512"
+                },
+                "duration": 226000
+            },
+            "progress": 8.25,
+            "playing": false
+        });
+
+        let snapshot = snapshot_from_gui(&player);
+        assert_eq!(snapshot.title.as_deref(), Some("夜曲"));
+        assert_eq!(snapshot.artist.as_deref(), Some("周杰伦"));
+        assert_eq!(snapshot.album.as_deref(), Some("十一月的萧邦"));
+        assert_eq!(
+            snapshot.cover_url.as_deref(),
+            Some("https://p2.music.126.net/fm.jpg?param=64y64")
+        );
+        assert_eq!(snapshot.position_ms, 8250);
+        assert_eq!(snapshot.duration_ms, Some(226000));
+        assert!(!snapshot.playing);
     }
 
     #[test]

@@ -129,7 +129,13 @@ sel = 3
 
 仓库自带一个 [Agent Skill](skills/ypm/SKILL.md)，让任何支持 SKILL.md 标准的
 agent（Claude Code、Cursor、Codex、dsh 等）通过 `ypm` CLI 控制播放：
-查在放的歌、暂停/继续、切歌。
+查在放的歌、暂停/继续、切歌、跳到指定时间（`ypm seek <秒>`）。
+
+程序需要读取 TUI 状态时可运行 `ypm --json --tui status`。返回值包含
+`playing`、`title`、`artist`、`album`、`positionMs`、`durationMs`、`coverUrl`、
+`seekable`、`iconStyle` 和 `source`；`coverUrl` 是可选的 64×64 网易云 HTTPS CDN 封面地址，
+没有封面时为 `null`。`seekable` 表示当前歌曲可接受绝对 seek，`iconStyle` 是 YPM 已选的
+`unicode` / `nerd` 图标模式。这三个字段都是向后兼容的增量，调用方应接受旧版缺省。
 
 ```sh
 mkdir -p ~/.agents/skills/ypm && curl -fsSL \

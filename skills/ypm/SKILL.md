@@ -1,6 +1,6 @@
 ---
 name: ypm
-description: Control the local YesPlayMusic player — pause/resume/toggle playback, skip to the next or previous track, or read what is currently playing. Use when the user asks about the music that is playing or wants it changed.
+description: Control the local YesPlayMusic player — read playback, pause/resume, change tracks, or seek to a requested time. Use when the user asks about the music that is playing or wants it changed.
 ---
 
 # ypm — YesPlayMusic remote control
@@ -12,7 +12,7 @@ the network or needs credentials.
 ## Procedure
 
 1. Pick the subcommand: `status` (what's playing), `pause`, `resume`,
-   `toggle`, `next`, `prev`.
+   `toggle`, `next`, `prev`, or `seek <seconds>` for an absolute position.
 2. Run it with `--json` and answer from the parsed output — the output is the
    truth about player state: `ypm status --json`.
 3. After a mutation, report it as done; run a follow-up `ypm status --json`

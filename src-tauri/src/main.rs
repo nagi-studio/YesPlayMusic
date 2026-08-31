@@ -1111,27 +1111,39 @@ fn spawn_control_socket(app: AppHandle) {
             if BufReader::new(&stream).read_line(&mut line).is_err() {
                 continue;
             }
-            let command = serde_json::from_str::<serde_json::Value>(&line)
-                .ok()
-                .and_then(|request| request.get("cmd")?.as_str().map(str::to_owned));
-            let event = match command.as_deref() {
-                Some("pause") => Some("pause"),
-                Some("resume") => Some("resume"),
-                Some("toggle") => Some("play"),
-                Some("next") => Some("next"),
-                Some("prev") => Some("previous"),
-                _ => None,
-            };
-            let reply = match event {
-                Some(event) => {
-                    emit_desktop_event(&app, event);
-                    r#"{"ok":true}"#
-                }
-                None => r#"{"ok":false,"error":"unsupported command"}"#,
+            let request = serde_json::from_str::<serde_json::Value>(&line).ok();
+            let reply = match request
+                .as_ref()
+                .and_then(|request| request.get("cmd"))
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("pause") => emit_control_event(&app, "pause"),
+                Some("resume") => emit_control_event(&app, "resume"),
+                Some("toggle") => emit_control_event(&app, "play"),
+                Some("next") => emit_control_event(&app, "next"),
+                Some("prev") => emit_control_event(&app, "previous"),
+                Some("seek") => match request
+                    .as_ref()
+                    .and_then(|request| request.get("positionMs"))
+                    .and_then(serde_json::Value::as_u64)
+                {
+                    Some(position_ms) => {
+                        let _ = app.emit("desktop://setPosition", position_ms as f64 / 1000.0);
+                        r#"{"ok":true}"#
+                    }
+                    None => r#"{"ok":false,"error":"invalid seek position"}"#,
+                },
+                _ => r#"{"ok":false,"error":"unsupported command"}"#,
             };
             let _ = writeln!(&mut stream, "{reply}");
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+fn emit_control_event(app: &AppHandle, event: &str) -> &'static str {
+    emit_desktop_event(app, event);
+    r#"{"ok":true}"#
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

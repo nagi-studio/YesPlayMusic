@@ -157,6 +157,33 @@ fn solid_preview(color: ratatui::style::Color) -> PixelCover {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn remote_snapshot_projects_the_current_cover_before_it_renders() {
+    let mut state = AppState::new(&Config::default());
+    let mut current = row(7);
+    current.pic_url = Some("http://p3.music.126.net/7.jpg?token=secret".into());
+    state.active_row = Some(current);
+    state.now = Some(NowPlaying {
+        title: "Track 7".into(),
+        artist: "Artist".into(),
+        album: "Album".into(),
+        artist_id: None,
+        album_id: None,
+    });
+
+    let snapshot = state.remote_snapshot();
+    assert_eq!(
+        snapshot.cover_url.as_deref(),
+        Some("https://p3.music.126.net/7.jpg?param=64y64")
+    );
+    assert!(state.bar_cover.is_none());
+
+    // A parked row is not current metadata and must not leak stale artwork.
+    state.now = None;
+    assert_eq!(state.remote_snapshot().cover_url, None);
+}
+
 #[tokio::test]
 async fn paused_ui_ticks_advance_the_marquee_without_consuming_the_gg_prefix() {
     let directory = tempfile::tempdir().unwrap();
