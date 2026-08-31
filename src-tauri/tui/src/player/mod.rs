@@ -61,6 +61,10 @@ pub enum PlayerEvent {
     Ended {
         generation: u64,
     },
+    SeekFailed {
+        generation: u64,
+        message: String,
+    },
     Failed {
         generation: u64,
         message: String,
@@ -359,11 +363,9 @@ fn actor(context: ActorContext) {
                 PlayerCommand::SeekTo(position) => {
                     if let (Some(engine), Some(generation)) = (&engine, active_generation) {
                         if let Err(error) = engine.player.try_seek(position) {
-                            let _ = events.send(PlayerEvent::Failed {
+                            let _ = events.send(PlayerEvent::SeekFailed {
                                 generation,
                                 message: format!("seek failed: {error}"),
-                                cached: None,
-                                unm_source: false,
                             });
                         }
                     }

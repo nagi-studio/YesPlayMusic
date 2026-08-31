@@ -151,7 +151,7 @@ pub fn socket_path() -> PathBuf {
 }
 
 /// Bind the control socket, replacing a stale file left by a dead process.
-/// If another live TUI already listens, that one keeps the socket.
+/// A live owner rejects a second TUI so remote control cannot target the wrong one.
 pub fn bind(path: &PathBuf) -> std::io::Result<Option<UnixListener>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -160,7 +160,7 @@ pub fn bind(path: &PathBuf) -> std::io::Result<Option<UnixListener>> {
         Ok(listener) => Ok(Some(listener)),
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             if std::os::unix::net::UnixStream::connect(path).is_ok() {
-                return Ok(None);
+                return Err(error);
             }
             std::fs::remove_file(path)?;
             Ok(Some(UnixListener::bind(path)?))
@@ -407,6 +407,19 @@ mod tests {
         ] {
             assert_eq!(status_cover_url(raw), None, "{raw}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_live_control_socket_rejects_a_second_tui_but_stale_files_recover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctl.sock");
+        let listener = bind(&path).unwrap().expect("first TUI owns the socket");
+
+        let error = bind(&path).expect_err("a live owner must reject the second TUI");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+        drop(listener);
+        assert!(bind(&path).unwrap().is_some());
     }
 
     #[tokio::test]
