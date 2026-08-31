@@ -301,7 +301,10 @@ impl AppState {
                 fx.player.send(PlayerCommand::SeekTo(target));
             }
             Action::SeekToRatio(ratio) => {
-                if let Some(duration) = self.duration {
+                if let Some(duration) = self
+                    .duration
+                    .filter(|_| self.player_ready_generation == Some(self.generation))
+                {
                     let target = duration.mul_f64(ratio.clamp(0.0, 1.0));
                     fx.player.send(PlayerCommand::SeekTo(target));
                     // Show the jump immediately; the player event confirms it.

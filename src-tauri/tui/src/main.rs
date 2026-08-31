@@ -64,6 +64,11 @@ enum Ctl {
     Next,
     /// Go back to the previous track.
     Prev,
+    /// Seek to an absolute playback position in seconds.
+    Seek {
+        #[arg(value_name = "SECONDS", value_parser = parse_seek_seconds)]
+        seconds: f64,
+    },
     /// Update ypm itself to the newest release.
     Update,
 }
@@ -78,10 +83,23 @@ impl From<Ctl> for remote::Command {
             Ctl::Toggle => Self::Toggle,
             Ctl::Next => Self::Next,
             Ctl::Prev => Self::Prev,
+            Ctl::Seek { seconds } => Self::Seek {
+                position_ms: (seconds * 1000.0).round() as u64,
+            },
             // Handled in main() before this conversion runs.
             Ctl::Update => unreachable!("update is not a remote command"),
         }
     }
+}
+
+fn parse_seek_seconds(value: &str) -> Result<f64, String> {
+    let seconds = value
+        .parse::<f64>()
+        .map_err(|_| "seek position must be a number of seconds".to_owned())?;
+    if !seconds.is_finite() || seconds < 0.0 || seconds > u64::MAX as f64 / 1000.0 {
+        return Err("seek position must be a finite non-negative number of seconds".to_owned());
+    }
+    Ok(seconds)
 }
 
 fn main() -> Result<()> {
@@ -142,4 +160,34 @@ fn init_logging(debug: bool) -> Result<Option<tracing_appender::non_blocking::Wo
         )
         .init();
     Ok(Some(guard))
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn seek_accepts_fractional_seconds_and_rejects_invalid_positions() {
+        let args = Args::try_parse_from(["ypm", "--tui", "seek", "90.5"]).unwrap();
+        assert!(matches!(
+            args.command,
+            Some(Ctl::Seek { seconds }) if (seconds - 90.5).abs() < f64::EPSILON
+        ));
+
+        for value in ["-1", "NaN", "inf", "later"] {
+            assert!(
+                Args::try_parse_from(["ypm", "seek", value]).is_err(),
+                "{value}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seek_converts_to_the_millisecond_wire_protocol() {
+        assert_eq!(
+            remote::Command::from(Ctl::Seek { seconds: 1.25 }),
+            remote::Command::Seek { position_ms: 1250 }
+        );
+    }
 }

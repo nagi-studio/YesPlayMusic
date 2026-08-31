@@ -21,12 +21,47 @@ pub struct Snapshot {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    #[serde(default)]
+    pub cover_url: Option<String>,
+    #[serde(default)]
+    pub seekable: bool,
+    #[serde(default)]
+    pub icon_style: crate::config::IconStyle,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
 }
 
+const STATUS_COVER_EDGE: u16 = 64;
+
+/// Keep status artwork on the official CDN, small, and free of upstream query
+/// credentials before it crosses the public CLI boundary.
+pub(crate) fn status_cover_url(raw: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(raw.trim()).ok()?;
+    let default_port = match url.scheme() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    if url.port().is_some_and(|port| port != default_port) {
+        return None;
+    }
+    if url.scheme() == "http" {
+        url.set_scheme("https").ok()?;
+    }
+    let host = url.host_str()?;
+    let official_host = host == "music.126.net" || host.ends_with(".music.126.net");
+    if !official_host || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.query_pairs_mut()
+        .append_pair("param", &format!("{STATUS_COVER_EDGE}y{STATUS_COVER_EDGE}"));
+    Some(url.to_string())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "cmd", rename_all = "lowercase")]
+#[serde(tag = "cmd", rename_all = "lowercase", rename_all_fields = "camelCase")]
 pub enum Command {
     Status,
     Pause,
@@ -34,6 +69,7 @@ pub enum Command {
     Toggle,
     Next,
     Prev,
+    Seek { position_ms: u64 },
 }
 
 pub fn socket_path() -> PathBuf {
@@ -89,6 +125,14 @@ async fn handle(
             let snapshot = snapshots.borrow().clone();
             match command {
                 Command::Status => serde_json::to_string(&snapshot).expect("snapshot serializes"),
+                Command::Seek { position_ms } => match snapshot.duration_ms {
+                    Some(duration_ms) if snapshot.seekable && duration_ms > 0 => {
+                        let ratio = position_ms as f64 / duration_ms as f64;
+                        let _ = actions.send(Action::SeekToRatio(ratio.clamp(0.0, 1.0)));
+                        r#"{"ok":true}"#.to_owned()
+                    }
+                    _ => r#"{"ok":false,"error":"current track is not seekable"}"#.to_owned(),
+                },
                 other => {
                     let action = match other {
                         Command::Toggle => Some(Action::TogglePlay),
@@ -96,7 +140,7 @@ async fn handle(
                         Command::Resume => (!snapshot.playing).then_some(Action::TogglePlay),
                         Command::Next => Some(Action::NextTrack),
                         Command::Prev => Some(Action::PrevTrack),
-                        Command::Status => unreachable!(),
+                        Command::Status | Command::Seek { .. } => unreachable!(),
                     };
                     if let Some(action) = action {
                         let _ = actions.send(action);
@@ -125,8 +169,73 @@ mod tests {
             (Command::Toggle, r#"{"cmd":"toggle"}"#),
             (Command::Next, r#"{"cmd":"next"}"#),
             (Command::Prev, r#"{"cmd":"prev"}"#),
+            (
+                Command::Seek {
+                    position_ms: 90_500,
+                },
+                r#"{"cmd":"seek","positionMs":90500}"#,
+            ),
         ] {
             assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn snapshot_cover_url_is_additive_and_camel_case() {
+        let legacy = r#"{
+            "playing":true,
+            "title":"Track",
+            "artist":"Artist",
+            "album":"Album",
+            "positionMs":1200,
+            "durationMs":180000
+        }"#;
+        let snapshot: Snapshot = serde_json::from_str(legacy).unwrap();
+        assert_eq!(snapshot.cover_url, None);
+        assert!(!snapshot.seekable);
+        assert_eq!(snapshot.icon_style, crate::config::IconStyle::Unicode);
+
+        let value = serde_json::to_value(Snapshot {
+            cover_url: Some("https://p1.music.126.net/cover.jpg?param=64y64".into()),
+            seekable: true,
+            icon_style: crate::config::IconStyle::Nerd,
+            ..Snapshot::default()
+        })
+        .unwrap();
+        assert_eq!(
+            value["coverUrl"],
+            "https://p1.music.126.net/cover.jpg?param=64y64"
+        );
+        assert!(value.get("cover_url").is_none());
+        assert_eq!(value["seekable"], true);
+        assert_eq!(value["iconStyle"], "nerd");
+    }
+
+    #[test]
+    fn status_cover_is_https_small_and_credential_free() {
+        assert_eq!(
+            status_cover_url(
+                "http://p1.music.126.net/cover.jpg?token=secret&param=1024y1024#private"
+            )
+            .as_deref(),
+            Some("https://p1.music.126.net/cover.jpg?param=64y64")
+        );
+        assert_eq!(
+            status_cover_url("https://p2.music.126.net:443/cover.jpg").as_deref(),
+            Some("https://p2.music.126.net/cover.jpg?param=64y64")
+        );
+
+        for raw in [
+            "",
+            "not a URL",
+            "file:///tmp/cover.jpg",
+            "data:image/png;base64,secret",
+            "https://example.test/cover.jpg",
+            "https://music.126.net.evil.test/cover.jpg",
+            "https://p1.music.126.net:8443/cover.jpg",
+            "https://user:password@p1.music.126.net/cover.jpg",
+        ] {
+            assert_eq!(status_cover_url(raw), None, "{raw}");
         }
     }
 
@@ -163,6 +272,38 @@ mod tests {
         assert_eq!(roundtrip(Command::Next).await, "{\"ok\":true}\n");
         // Pause while paused sent nothing; Next arrived instead.
         assert!(matches!(received.recv().await, Some(Action::NextTrack)));
+
+        publish.send_replace(Snapshot {
+            duration_ms: Some(200_000),
+            seekable: false,
+            ..Snapshot::default()
+        });
+        assert_eq!(
+            roundtrip(Command::Seek {
+                position_ms: 50_000,
+            })
+            .await,
+            "{\"ok\":false,\"error\":\"current track is not seekable\"}\n"
+        );
+        assert_eq!(roundtrip(Command::Next).await, "{\"ok\":true}\n");
+        assert!(matches!(received.recv().await, Some(Action::NextTrack)));
+
+        publish.send_replace(Snapshot {
+            duration_ms: Some(200_000),
+            seekable: true,
+            ..Snapshot::default()
+        });
+        assert_eq!(
+            roundtrip(Command::Seek {
+                position_ms: 50_000,
+            })
+            .await,
+            "{\"ok\":true}\n"
+        );
+        assert!(matches!(
+            received.recv().await,
+            Some(Action::SeekToRatio(ratio)) if (ratio - 0.25).abs() < f64::EPSILON
+        ));
 
         let status: Snapshot =
             serde_json::from_str(roundtrip(Command::Status).await.trim()).unwrap();
