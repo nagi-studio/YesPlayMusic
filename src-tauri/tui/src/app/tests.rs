@@ -177,11 +177,35 @@ fn remote_snapshot_projects_the_current_cover_before_it_renders() {
         snapshot.cover_url.as_deref(),
         Some("https://p3.music.126.net/7.jpg?param=64y64")
     );
+    state.duration = Some(Duration::from_secs(180));
+    assert!(
+        !state.remote_snapshot().seekable,
+        "resolved duration alone must not advertise a seek the player would drop"
+    );
+    state.player_ready_generation = Some(state.generation);
+    assert!(state.remote_snapshot().seekable);
     assert!(state.bar_cover.is_none());
 
     // A parked row is not current metadata and must not leak stale artwork.
     state.now = None;
     assert_eq!(state.remote_snapshot().cover_url, None);
+}
+
+#[tokio::test]
+async fn ratio_seek_is_ignored_until_the_current_player_generation_starts() {
+    let directory = tempfile::tempdir().unwrap();
+    let fx = effects(&directory);
+    let mut state = AppState::new(&Config::default());
+    state.generation = 3;
+    state.duration = Some(Duration::from_secs(200));
+    state.position = Duration::from_secs(10);
+
+    state.update(Action::SeekToRatio(0.5), &fx);
+    assert_eq!(state.position, Duration::from_secs(10));
+
+    state.player_ready_generation = Some(3);
+    state.update(Action::SeekToRatio(0.5), &fx);
+    assert_eq!(state.position, Duration::from_secs(100));
 }
 
 #[tokio::test]

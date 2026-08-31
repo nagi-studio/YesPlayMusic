@@ -706,6 +706,7 @@ pub struct AppState {
     volume_before_mute: Option<f32>,
     resume_on_play: Option<Duration>,
     seek_after_start: Option<Duration>,
+    player_ready_generation: Option<u64>,
     pub status: Option<String>,
     pub(crate) command_feedback: Option<String>,
     pub(crate) command_feedback_error: bool,
@@ -849,6 +850,7 @@ impl AppState {
             self_update: SelfUpdate::Idle,
             brew_install: crate::update::installed_via_brew(),
             seek_after_start: None,
+            player_ready_generation: None,
             status: None,
             command_feedback: None,
             command_feedback_error: false,
@@ -1244,7 +1246,9 @@ impl AppState {
                     .and_then(|row| row.pic_url.as_deref())
                     .and_then(remote::status_cover_url)
             }),
-            seekable: self.now.is_some() && self.duration.is_some(),
+            seekable: self.now.is_some()
+                && self.duration.is_some()
+                && self.player_ready_generation == Some(self.generation),
             icon_style: self.config.icons,
             position_ms: self.position.as_millis() as u64,
             duration_ms: self.duration.map(|duration| duration.as_millis() as u64),
@@ -1895,6 +1899,7 @@ impl AppState {
         self.paused = false;
         self.resume_on_play = None;
         self.seek_after_start = None;
+        self.player_ready_generation = None;
         if row.pic_url.is_none() {
             self.clear_cover();
         }
@@ -2020,6 +2025,7 @@ impl AppState {
         match event {
             PlayerEvent::Started { generation, total } => {
                 if generation == self.generation {
+                    self.player_ready_generation = Some(generation);
                     if let Some(position) = self.seek_after_start.take() {
                         self.position = position;
                         fx.player.send(PlayerCommand::SeekTo(position));
@@ -2047,6 +2053,7 @@ impl AppState {
             }
             PlayerEvent::Ended { generation } => {
                 if generation == self.generation {
+                    self.player_ready_generation = None;
                     self.pending_auto_next = true;
                 }
             }
@@ -2057,6 +2064,7 @@ impl AppState {
                 unm_source,
             } => {
                 if generation == self.generation {
+                    self.player_ready_generation = None;
                     if let (Some(metadata), Some(row)) = (cached, self.active_row.clone()) {
                         self.status = Some(i18n::t(Key::Resolving).into());
                         spawn_cache_fallback(fx, generation, metadata, row);

@@ -36,15 +36,16 @@ pub async fn run(command: Command, forced: Option<Target>, json: bool) -> Result
     let gui = probe(status_gui()).await;
     let tui = probe(status_tui()).await;
     let target = resolve(forced, &gui, &tui)?;
+    let snapshot = match target {
+        Target::Gui => gui.as_ref().expect("resolve only returns live targets"),
+        Target::Tui => tui.as_ref().expect("resolve only returns live targets"),
+    };
 
     if command == Command::Status {
-        let snapshot = match target {
-            Target::Gui => gui.expect("resolve only returns live targets"),
-            Target::Tui => tui.expect("resolve only returns live targets"),
-        };
-        report_status(target, &snapshot, json);
+        report_status(target, snapshot, json);
         return Ok(());
     }
+    ensure_command_supported(command, target, snapshot)?;
 
     match target {
         Target::Gui => {
@@ -74,6 +75,13 @@ pub async fn run(command: Command, forced: Option<Target>, json: bool) -> Result
             Command::Status => unreachable!(),
         };
         println!("{done}（{}）", target.label());
+    }
+    Ok(())
+}
+
+fn ensure_command_supported(command: Command, target: Target, snapshot: &Snapshot) -> Result<()> {
+    if matches!(command, Command::Seek { .. }) && !snapshot.seekable {
+        bail!("{} 当前曲目不能跳转", target.label());
     }
     Ok(())
 }
@@ -225,6 +233,20 @@ fn snapshot_from_gui(player: &Value) -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_requires_the_selected_player_to_advertise_readiness() {
+        let seek = Command::Seek {
+            position_ms: 30_000,
+        };
+        let mut snapshot = Snapshot::default();
+        assert!(ensure_command_supported(seek, Target::Gui, &snapshot).is_err());
+        assert!(ensure_command_supported(seek, Target::Tui, &snapshot).is_err());
+
+        snapshot.seekable = true;
+        assert!(ensure_command_supported(seek, Target::Gui, &snapshot).is_ok());
+        assert!(ensure_command_supported(seek, Target::Tui, &snapshot).is_ok());
+    }
 
     #[test]
     fn gui_playlist_track_maps_to_snapshot() {
