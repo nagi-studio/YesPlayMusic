@@ -1234,9 +1234,14 @@ impl AppState {
     }
 
     #[cfg(unix)]
+    fn player_is_playing(&self) -> bool {
+        self.now.is_some() && !self.paused && self.player_ready_generation == Some(self.generation)
+    }
+
+    #[cfg(unix)]
     fn remote_snapshot(&self) -> remote::Snapshot {
         remote::Snapshot {
-            playing: self.now.is_some() && !self.paused,
+            playing: self.player_is_playing(),
             title: self.now.as_ref().map(|now| now.title.clone()),
             artist: self.now.as_ref().map(|now| now.artist.clone()),
             album: self.now.as_ref().map(|now| now.album.clone()),
@@ -2057,6 +2062,14 @@ impl AppState {
                     self.pending_auto_next = true;
                 }
             }
+            PlayerEvent::SeekFailed {
+                generation,
+                message,
+            } => {
+                if generation == self.generation {
+                    self.status = Some(message);
+                }
+            }
             PlayerEvent::Failed {
                 generation,
                 message,
@@ -2071,6 +2084,8 @@ impl AppState {
                     } else if unm_source {
                         self.handle_track_unavailable(fx);
                     } else {
+                        self.paused = true;
+                        self.resume_on_play = Some(self.position);
                         self.status = Some(message);
                     }
                 }
@@ -2910,8 +2925,10 @@ async fn event_loop(
                 spectrum_subscribers.clone(),
             ));
         }
-        // Another live TUI owns the socket; it keeps remote control.
-        Ok(None) => {}
+        Ok(None) => anyhow::bail!("已有另一个 ypm TUI 在运行"),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            anyhow::bail!("已有另一个 ypm TUI 在运行")
+        }
         Err(error) => tracing::warn!(%error, "control socket unavailable"),
     }
     #[cfg(unix)]
@@ -3031,11 +3048,16 @@ async fn event_loop(
                 #[cfg(unix)]
                 {
                     if spectrum_stream_active() {
+                        let playing = state.player_is_playing();
                         let _ = spectrum_publish.send(remote::SpectrumFrame {
                             version: remote::SPECTRUM_PROTOCOL_VERSION,
                             style: state.config.spectrum_style,
-                            playing: state.now.is_some() && !state.paused,
-                            bins: state.spectrum.remote_bins(),
+                            playing,
+                            bins: if playing {
+                                state.spectrum.remote_bins()
+                            } else {
+                                [0; crate::spectrum::REMOTE_SPECTRUM_BINS]
+                            },
                         });
                     }
                 }
@@ -3117,3 +3139,124 @@ fn apply(state: &mut AppState, action: Action, fx: &Effects, hits: &ui::Hits) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod playback_health_tests {
+    use super::*;
+
+    fn test_row() -> SongRow {
+        SongRow {
+            id: 7,
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_ms: 180_000,
+            pic_url: None,
+            artist_id: None,
+            album_id: None,
+        }
+    }
+
+    fn test_effects(directory: &tempfile::TempDir) -> Effects {
+        let (player, _events) = player::spawn(tokio::runtime::Handle::current());
+        let (actions, _receiver) = mpsc::unbounded_channel();
+        Effects {
+            player,
+            ncm: Arc::new(Ncm::new(
+                directory.path().join("session.json"),
+                yesplaymusic_core::cache::AudioQuality::High320,
+                true,
+            )),
+            store: Arc::new(crate::store::LibraryStore::new(
+                directory.path().join("library"),
+            )),
+            actions,
+            cache_root: None,
+            covers: None,
+            config_path: directory.path().join("config.toml"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_playing_waits_for_the_current_player_generation() {
+        let mut state = AppState::new(&Config::default());
+        state.now = Some(NowPlaying {
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            artist_id: None,
+            album_id: None,
+        });
+
+        assert!(!state.remote_snapshot().playing);
+        state.player_ready_generation = Some(state.generation);
+        assert!(state.remote_snapshot().playing);
+        state.player_ready_generation = Some(state.generation + 1);
+        assert!(!state.remote_snapshot().playing);
+        state.player_ready_generation = Some(state.generation);
+        state.paused = true;
+        assert!(!state.remote_snapshot().playing);
+    }
+
+    #[tokio::test]
+    async fn ordinary_player_failure_parks_a_retry_instead_of_fake_playing() {
+        let directory = tempfile::tempdir().unwrap();
+        let fx = test_effects(&directory);
+        let mut state = AppState::new(&Config::default());
+        state.active_row = Some(test_row());
+        state.now = Some(NowPlaying {
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            artist_id: None,
+            album_id: None,
+        });
+        state.position = Duration::from_secs(12);
+
+        state.apply_player_event(
+            &fx,
+            PlayerEvent::Failed {
+                generation: state.generation,
+                message: "audio device unavailable".into(),
+                cached: None,
+                unm_source: false,
+            },
+        );
+
+        assert!(state.paused);
+        assert_eq!(state.resume_on_play, Some(Duration::from_secs(12)));
+        let failed_generation = state.generation;
+        state.toggle_play(&fx);
+        assert_eq!(state.generation, failed_generation + 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn seek_failure_keeps_live_playback_ready() {
+        let directory = tempfile::tempdir().unwrap();
+        let fx = test_effects(&directory);
+        let mut state = AppState::new(&Config::default());
+        state.now = Some(NowPlaying {
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            artist_id: None,
+            album_id: None,
+        });
+        state.player_ready_generation = Some(state.generation);
+
+        state.apply_player_event(
+            &fx,
+            PlayerEvent::SeekFailed {
+                generation: state.generation,
+                message: "seek failed".into(),
+            },
+        );
+
+        assert!(!state.paused);
+        assert_eq!(state.player_ready_generation, Some(state.generation));
+        assert!(state.remote_snapshot().playing);
+        assert_eq!(state.status.as_deref(), Some("seek failed"));
+    }
+}

@@ -459,6 +459,7 @@ pub struct SpectrumView {
     glow: GhostBuffer,
     ticks: u64,
     settled: bool,
+    using_captured_samples: bool,
     terminal_background: Option<Color>,
 }
 
@@ -473,6 +474,7 @@ impl SpectrumView {
             glow: GhostBuffer::default(),
             ticks: 0,
             settled: true,
+            using_captured_samples: false,
             terminal_background: None,
         }
     }
@@ -488,7 +490,11 @@ impl SpectrumView {
     /// Quantize the analyzer output without exposing PCM or its internal bin count.
     #[cfg(unix)]
     pub fn remote_bins(&self) -> [u8; REMOTE_SPECTRUM_BINS] {
-        quantized_bins(&self.bins)
+        if self.using_captured_samples {
+            quantized_bins(&self.bins)
+        } else {
+            [0; REMOTE_SPECTRUM_BINS]
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -504,6 +510,7 @@ impl SpectrumView {
         self.ticks = self.ticks.wrapping_add(1);
         let real = capture.latest(FFT_SAMPLES);
         let live = playing && !real.is_empty();
+        self.using_captured_samples = live;
         self.samples = if live {
             real
         } else if playing || preview {
@@ -1634,6 +1641,26 @@ mod tests {
         assert!(projected[1..REMOTE_SPECTRUM_BINS - 1]
             .iter()
             .all(|value| *value == 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_bins_never_export_the_simulation_fallback() {
+        let capture = SampleBuffer::default();
+        let mut view = SpectrumView::new(SpectrumKind::Blocks);
+
+        view.tick(&capture, true, false, true, false, false);
+        assert!(view.bins.iter().any(|value| *value > 0.0));
+        assert!(view.remote_bins().iter().all(|value| *value == 0));
+
+        let real = SampleBuffer::default();
+        for index in 0..FFT_SAMPLES {
+            let sample = (2.0 * PI * 16.0 * index as f32 / FFT_SAMPLES as f32).sin();
+            real.push(sample, sample, sample);
+        }
+        let mut view = SpectrumView::new(SpectrumKind::Blocks);
+        view.tick(&real, true, false, true, false, false);
+        assert!(view.remote_bins().iter().any(|value| *value > 0));
     }
 
     #[test]
