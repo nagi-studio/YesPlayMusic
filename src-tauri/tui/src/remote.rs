@@ -5,13 +5,17 @@
 //! (keep the wire words in sync). The client half lives in ctl.rs.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch, Notify};
+use tokio::time::{sleep_until, Duration, Instant};
 
 use crate::action::Action;
+use crate::spectrum::{REMOTE_SPECTRUM_BINS, REMOTE_SPECTRUM_MAX_FPS};
 
 /// Now-playing state published by the app loop for `status` replies.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -29,6 +33,75 @@ pub struct Snapshot {
     pub icon_style: crate::config::IconStyle,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
+}
+
+pub const SPECTRUM_PROTOCOL_VERSION: u8 = 1;
+#[cfg(not(test))]
+const SPECTRUM_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const SPECTRUM_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Bounded, versioned analyzer projection for public NDJSON consumers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrumFrame {
+    pub version: u8,
+    pub style: crate::spectrum::SpectrumKind,
+    pub playing: bool,
+    pub bins: [u8; REMOTE_SPECTRUM_BINS],
+}
+
+impl Default for SpectrumFrame {
+    fn default() -> Self {
+        Self {
+            version: SPECTRUM_PROTOCOL_VERSION,
+            style: crate::spectrum::SpectrumKind::default(),
+            playing: false,
+            bins: [0; REMOTE_SPECTRUM_BINS],
+        }
+    }
+}
+
+/// The app only pays the FFT cost while at least one public stream is alive.
+#[derive(Clone, Default)]
+pub struct SpectrumSubscribers(Arc<SpectrumSubscriberState>);
+
+#[derive(Default)]
+struct SpectrumSubscriberState {
+    count: AtomicUsize,
+    changed: Notify,
+}
+
+impl SpectrumSubscribers {
+    pub fn is_active(&self) -> bool {
+        self.0.count.load(Ordering::Acquire) > 0
+    }
+
+    /// Wake the app loop when the active state changes in either direction.
+    pub async fn changed(&self) {
+        self.0.changed.notified().await;
+    }
+
+    fn subscribe(&self) -> SpectrumSubscription {
+        if self.0.count.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.0.changed.notify_one();
+        }
+        SpectrumSubscription(self.clone())
+    }
+
+    fn unsubscribe(&self) {
+        if self.0.count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.changed.notify_one();
+        }
+    }
+}
+
+struct SpectrumSubscription(SpectrumSubscribers);
+
+impl Drop for SpectrumSubscription {
+    fn drop(&mut self) {
+        self.0.unsubscribe();
+    }
 }
 
 const STATUS_COVER_EDGE: u16 = 64;
@@ -64,6 +137,7 @@ pub(crate) fn status_cover_url(raw: &str) -> Option<String> {
 #[serde(tag = "cmd", rename_all = "lowercase", rename_all_fields = "camelCase")]
 pub enum Command {
     Status,
+    Spectrum { fps: u8 },
     Pause,
     Resume,
     Toggle,
@@ -99,6 +173,8 @@ pub async fn serve(
     listener: UnixListener,
     actions: mpsc::UnboundedSender<Action>,
     snapshots: watch::Receiver<Snapshot>,
+    spectrum_frames: broadcast::Sender<SpectrumFrame>,
+    spectrum_subscribers: SpectrumSubscribers,
 ) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
@@ -106,8 +182,17 @@ pub async fn serve(
         };
         let actions = actions.clone();
         let snapshots = snapshots.clone();
+        let spectrum_frames = spectrum_frames.clone();
+        let spectrum_subscribers = spectrum_subscribers.clone();
         tokio::spawn(async move {
-            let _ = handle(stream, actions, snapshots).await;
+            let _ = handle(
+                stream,
+                actions,
+                snapshots,
+                spectrum_frames,
+                spectrum_subscribers,
+            )
+            .await;
         });
     }
 }
@@ -116,43 +201,124 @@ async fn handle(
     stream: UnixStream,
     actions: mpsc::UnboundedSender<Action>,
     snapshots: watch::Receiver<Snapshot>,
+    spectrum_frames: broadcast::Sender<SpectrumFrame>,
+    spectrum_subscribers: SpectrumSubscribers,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
     let mut line = String::new();
-    BufReader::new(reader).read_line(&mut line).await?;
-    let reply = match serde_json::from_str::<Command>(&line) {
-        Ok(command) => {
-            let snapshot = snapshots.borrow().clone();
-            match command {
-                Command::Status => serde_json::to_string(&snapshot).expect("snapshot serializes"),
-                Command::Seek { position_ms } => match snapshot.duration_ms {
-                    Some(duration_ms) if snapshot.seekable && duration_ms > 0 => {
-                        let ratio = position_ms as f64 / duration_ms as f64;
-                        let _ = actions.send(Action::SeekToRatio(ratio.clamp(0.0, 1.0)));
-                        r#"{"ok":true}"#.to_owned()
-                    }
-                    _ => r#"{"ok":false,"error":"current track is not seekable"}"#.to_owned(),
-                },
-                other => {
-                    let action = match other {
-                        Command::Toggle => Some(Action::TogglePlay),
-                        Command::Pause => snapshot.playing.then_some(Action::TogglePlay),
-                        Command::Resume => (!snapshot.playing).then_some(Action::TogglePlay),
-                        Command::Next => Some(Action::NextTrack),
-                        Command::Prev => Some(Action::PrevTrack),
-                        Command::Status | Command::Seek { .. } => unreachable!(),
-                    };
-                    if let Some(action) = action {
-                        let _ = actions.send(action);
-                    }
-                    r#"{"ok":true}"#.to_owned()
-                }
-            }
+    reader.read_line(&mut line).await?;
+    let command = match serde_json::from_str::<Command>(&line) {
+        Ok(command) => command,
+        Err(error) => {
+            let reply = serde_json::json!({ "ok": false, "error": error.to_string() });
+            writer.write_all(reply.to_string().as_bytes()).await?;
+            return writer.write_all(b"\n").await;
         }
-        Err(error) => format!(r#"{{"ok":false,"error":"{error}"}}"#),
+    };
+    if let Command::Spectrum { fps } = command {
+        if !(1..=REMOTE_SPECTRUM_MAX_FPS).contains(&fps) {
+            writer
+                .write_all(b"{\"ok\":false,\"error\":\"spectrum fps must be between 1 and 20\"}\n")
+                .await?;
+            return Ok(());
+        }
+        let subscription = spectrum_subscribers.subscribe();
+        let frames = spectrum_frames.subscribe();
+        return stream_spectrum(&mut reader, &mut writer, frames, subscription, fps).await;
+    }
+
+    let snapshot = snapshots.borrow().clone();
+    let reply = match command {
+        Command::Status => serde_json::to_string(&snapshot).expect("snapshot serializes"),
+        Command::Seek { position_ms } => match snapshot.duration_ms {
+            Some(duration_ms) if snapshot.seekable && duration_ms > 0 => {
+                let ratio = position_ms as f64 / duration_ms as f64;
+                let _ = actions.send(Action::SeekToRatio(ratio.clamp(0.0, 1.0)));
+                r#"{"ok":true}"#.to_owned()
+            }
+            _ => r#"{"ok":false,"error":"current track is not seekable"}"#.to_owned(),
+        },
+        other => {
+            let action = match other {
+                Command::Toggle => Some(Action::TogglePlay),
+                Command::Pause => snapshot.playing.then_some(Action::TogglePlay),
+                Command::Resume => (!snapshot.playing).then_some(Action::TogglePlay),
+                Command::Next => Some(Action::NextTrack),
+                Command::Prev => Some(Action::PrevTrack),
+                Command::Status | Command::Spectrum { .. } | Command::Seek { .. } => {
+                    unreachable!()
+                }
+            };
+            if let Some(action) = action {
+                let _ = actions.send(action);
+            }
+            r#"{"ok":true}"#.to_owned()
+        }
     };
     writer.write_all(reply.as_bytes()).await?;
     writer.write_all(b"\n").await
+}
+
+async fn stream_spectrum<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    mut frames: broadcast::Receiver<SpectrumFrame>,
+    _subscription: SpectrumSubscription,
+    fps: u8,
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let interval = Duration::from_secs_f64(1.0 / f64::from(fps));
+    let mut next_send = Instant::now();
+    loop {
+        let mut frame = loop {
+            let received = tokio::select! {
+                received = frames.recv() => received,
+                disconnected = reader.read_u8() => {
+                    let _ = disconnected;
+                    return Ok(());
+                }
+            };
+            match received {
+                Ok(frame) => break frame,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            }
+        };
+
+        let now = Instant::now();
+        if now < next_send {
+            tokio::select! {
+                _ = sleep_until(next_send) => {}
+                disconnected = reader.read_u8() => {
+                    let _ = disconnected;
+                    return Ok(());
+                }
+            }
+        }
+        loop {
+            match frames.try_recv() {
+                Ok(latest) => frame = latest,
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Closed) => return Ok(()),
+            }
+        }
+        let mut encoded = serde_json::to_vec(&frame).expect("spectrum frame serializes");
+        encoded.push(b'\n');
+        tokio::select! {
+            result = writer.write_all(&encoded) => result?,
+            disconnected = reader.read_u8() => {
+                let _ = disconnected;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(SPECTRUM_WRITE_TIMEOUT) => return Ok(()),
+        }
+        next_send = Instant::now() + interval;
+    }
 }
 
 #[cfg(test)]
@@ -164,6 +330,10 @@ mod tests {
         // The GUI parses these words independently; renaming breaks it.
         for (command, wire) in [
             (Command::Status, r#"{"cmd":"status"}"#),
+            (
+                Command::Spectrum { fps: 12 },
+                r#"{"cmd":"spectrum","fps":12}"#,
+            ),
             (Command::Pause, r#"{"cmd":"pause"}"#),
             (Command::Resume, r#"{"cmd":"resume"}"#),
             (Command::Toggle, r#"{"cmd":"toggle"}"#),
@@ -249,7 +419,15 @@ mod tests {
             playing: true,
             ..Snapshot::default()
         });
-        tokio::spawn(serve(listener, actions, snapshots));
+        let (spectrum_publish, _) = broadcast::channel(4);
+        let spectrum_subscribers = SpectrumSubscribers::default();
+        tokio::spawn(serve(
+            listener,
+            actions,
+            snapshots,
+            spectrum_publish,
+            spectrum_subscribers,
+        ));
 
         let roundtrip = |cmd: Command| {
             let path = path.clone();
@@ -308,5 +486,131 @@ mod tests {
         let status: Snapshot =
             serde_json::from_str(roundtrip(Command::Status).await.trim()).unwrap();
         assert!(!status.playing);
+    }
+
+    #[tokio::test]
+    async fn spectrum_stream_projects_bounded_frames_and_releases_its_subscription() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctl.sock");
+        let listener = bind(&path).unwrap().unwrap();
+        let (actions, _) = mpsc::unbounded_channel();
+        let (_, snapshots) = watch::channel(Snapshot::default());
+        let (publish, _) = broadcast::channel(4);
+        let subscribers = SpectrumSubscribers::default();
+        tokio::spawn(serve(
+            listener,
+            actions,
+            snapshots,
+            publish.clone(),
+            subscribers.clone(),
+        ));
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        stream
+            .write_all(b"{\"cmd\":\"spectrum\",\"fps\":20}\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_millis(250), async {
+            while !subscribers.is_active() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(subscribers.is_active());
+
+        let mut expected = SpectrumFrame {
+            style: crate::spectrum::SpectrumKind::Braille,
+            playing: true,
+            ..SpectrumFrame::default()
+        };
+        expected.bins[0] = 255;
+        expected.bins[31] = 128;
+        publish.send(expected.clone()).unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            BufReader::new(&mut stream).read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            line.len() < 512,
+            "public frame grew unexpectedly: {}",
+            line.len()
+        );
+        assert_eq!(
+            serde_json::from_str::<SpectrumFrame>(line.trim()).unwrap(),
+            expected
+        );
+
+        drop(stream);
+        tokio::time::timeout(Duration::from_millis(250), async {
+            while subscribers.is_active() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!subscribers.is_active());
+    }
+
+    #[tokio::test]
+    async fn spectrum_subscription_transitions_are_wakeable() {
+        let subscribers = SpectrumSubscribers::default();
+        let waiting = subscribers.clone();
+        let wake_on_subscribe = tokio::spawn(async move {
+            waiting.changed().await;
+            waiting.is_active()
+        });
+
+        let subscription = subscribers.subscribe();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), wake_on_subscribe)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+
+        let waiting = subscribers.clone();
+        let wake_on_unsubscribe = tokio::spawn(async move {
+            waiting.changed().await;
+            waiting.is_active()
+        });
+        drop(subscription);
+        assert!(
+            !tokio::time::timeout(Duration::from_millis(250), wake_on_unsubscribe)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_spectrum_consumers_release_the_analyzer() {
+        let subscribers = SpectrumSubscribers::default();
+        let subscription = subscribers.subscribe();
+        let (publish, frames) = broadcast::channel(1);
+        let (server, _client) = tokio::io::duplex(1);
+        let (mut reader, mut writer) = tokio::io::split(server);
+        let task = tokio::spawn(async move {
+            stream_spectrum(
+                &mut reader,
+                &mut writer,
+                frames,
+                subscription,
+                REMOTE_SPECTRUM_MAX_FPS,
+            )
+            .await
+        });
+        publish.send(SpectrumFrame::default()).unwrap();
+
+        tokio::time::timeout(Duration::from_millis(250), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!subscribers.is_active());
     }
 }

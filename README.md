@@ -137,6 +137,17 @@ agent（Claude Code、Cursor、Codex、dsh 等）通过 `ypm` CLI 控制播放�
 没有封面时为 `null`。`seekable` 表示当前歌曲可接受绝对 seek，`iconStyle` 是 YPM 已选的
 `unicode` / `nerd` 图标模式。这三个字段都是向后兼容的增量，调用方应接受旧版缺省。
 
+需要实时可视化时，可从正在运行的 TUI 订阅版本化的 NDJSON 频谱流：
+
+```sh
+ypm --json --tui spectrum --fps 12
+```
+
+`fps` 可设为 1–20。每行是一个 `version: 1` 帧，包含当前 `style`、`playing` 和固定
+32 个 0–255 的归一化 `bins`。接口只投影频谱，不暴露 PCM；首个订阅连接时才启用
+分析，最后一个连接断开后自动停用。该流目前和其他 TUI 远程控制一样，只支持 macOS
+与 Linux。
+
 ```sh
 mkdir -p ~/.agents/skills/ypm && curl -fsSL \
   https://raw.githubusercontent.com/nagi-studio/YesPlayMusic/master/skills/ypm/SKILL.md \

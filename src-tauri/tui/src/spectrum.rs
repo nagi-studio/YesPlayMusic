@@ -16,6 +16,11 @@ use crate::theme::Theme;
 pub const CAPTURE_SAMPLES: usize = 4096;
 pub const FFT_SAMPLES: usize = 1024;
 pub const SPECTRUM_BINS: usize = 66;
+/// Stable, compact public projection used by the `ypm spectrum` stream.
+#[cfg(any(unix, test))]
+pub const REMOTE_SPECTRUM_BINS: usize = 32;
+/// Highest public stream rate accepted by both CLI and socket server.
+pub const REMOTE_SPECTRUM_MAX_FPS: u8 = 20;
 /// Paused audio below this level no longer leaves rounded half-cells visible.
 const SILENCE_THRESHOLD: f32 = 0.01;
 
@@ -480,6 +485,12 @@ impl SpectrumView {
         self.analyzer.set_sensitivity(attack, decay, range_db);
     }
 
+    /// Quantize the analyzer output without exposing PCM or its internal bin count.
+    #[cfg(unix)]
+    pub fn remote_bins(&self) -> [u8; REMOTE_SPECTRUM_BINS] {
+        quantized_bins(&self.bins)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self,
@@ -557,6 +568,24 @@ impl SpectrumView {
             self.glow.clear();
         }
     }
+}
+
+#[cfg(any(unix, test))]
+fn quantized_bins(source: &[f32]) -> [u8; REMOTE_SPECTRUM_BINS] {
+    let mut result = [0; REMOTE_SPECTRUM_BINS];
+    if source.is_empty() {
+        return result;
+    }
+    for (index, value) in result.iter_mut().enumerate() {
+        let start = index * source.len() / REMOTE_SPECTRUM_BINS;
+        let end = ((index + 1) * source.len() / REMOTE_SPECTRUM_BINS).max(start + 1);
+        let peak = source[start..end.min(source.len())]
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        *value = (peak.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    result
 }
 
 fn simulated_samples(tick: u64) -> Vec<f32> {
@@ -1590,6 +1619,22 @@ mod tests {
     use rodio::buffer::SamplesBuffer;
 
     use super::*;
+
+    #[test]
+    fn public_bins_are_fixed_size_peak_pooled_and_quantized() {
+        let mut source = [0.0_f32; SPECTRUM_BINS];
+        source[0] = -1.0;
+        source[1] = 1.5;
+        source[SPECTRUM_BINS - 1] = 0.5;
+
+        let projected = quantized_bins(&source);
+        assert_eq!(projected.len(), REMOTE_SPECTRUM_BINS);
+        assert_eq!(projected[0], 255);
+        assert_eq!(projected[REMOTE_SPECTRUM_BINS - 1], 128);
+        assert!(projected[1..REMOTE_SPECTRUM_BINS - 1]
+            .iter()
+            .all(|value| *value == 0));
+    }
 
     #[test]
     fn gradient_off_reaches_every_ramp_style() {
