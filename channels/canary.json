@@ -1,23 +1,23 @@
 {
-  "version": "0.9.3",
-  "notes": "YesPlayMusic 0.9.3",
-  "pub_date": "2026-08-20T15:28:10Z",
+  "version": "0.11.0",
+  "notes": "YesPlayMusic 0.11.0",
+  "pub_date": "2026-08-31T15:38:04Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N084STNxN0F5RFFlMmxlQUhHQzdCNmU0c0pBdEdXaWFXeUdQRi8yZzNuMTM3UCtiZE4yYkZkZDkxbjVSR05GS1VkRHpWRVZFT1Iza1ZoTXZ3VVhTL2dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MjIxNzQ0CWZpbGU6WWVzUGxheU11c2ljLmFwcC50YXIuZ3oKYlFxbTRHbG42OXNsUHdscUhHTEI3UURaeHFRUWR5NFZSWHhuKzFyV25XekU5VEF5ZS9RNCtlYjVadzdFRmhCcHE2R0FNM3lIWldYbVFDeWlXUXU4QVE9PQo=",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.3/YesPlayMusic.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0Y1ejNhaFNjVWlQUUdPcEJLeWJsMHV3WEVQY1BYcDFMSFc0NFJ4cUtlT0lZNkU4SFZnS0FOZFE2ZmVSc3o3Rnd3T2dOVTJNTHUzSGhhaTBNUjFoN3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkwMzA1CWZpbGU6WWVzUGxheU11c2ljLmFwcC50YXIuZ3oKR2ZjZFRWTnVTSlREeGxObXhWM3VzVXhHc3NxRnl2L0hXbnJybUFhOEhhQm1kbW9wM2Vxd0lHV3dJb0NrK2NLRUh4VEFEN0NmengvNlJLRVUvK1JDQ1E9PQo=",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.11.0/YesPlayMusic.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0lzdkN1c2xBQlpGeTVyby8xV0lQZnZBV3U4TS9xRC9JK3cxdDVaWFZHOHJVNmJKNE5lODk2RVVCa2JPbStBMmxZaWs3anNxMzlmMXNnL2NpOVVwRWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MjIzNDIxCWZpbGU6WWVzUGxheU11c2ljXzAuOS4zX3g2NC1zZXR1cC5leGUKWUhOMmZ2dncxVVJvWVF0VFl4cVFpYjJKeXlUY25qejMwcjdxeTBRTGVzakxvT1NtbDlSdSttc0FXZUs4U1BjcE5kMERFb0w0cFFFZDRyVHNoYVVsQ0E9PQo=",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.3/YesPlayMusic_0.9.3_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0JEOTVGMFFHMStjdEJIcWx3UmJhRGpTaDhucGcrK0w2MnRyVyswcXczU2diclVmNWwvYmtOK0NaMm1qdU90ZEx6ZFZ6OXZDdUpncHl1dERWNUVhMkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkwMzI0CWZpbGU6WWVzUGxheU11c2ljXzAuMTEuMF94NjQtc2V0dXAuZXhlCllQMTZSdFJBYWd1Z3VPTnhFQ1J2Q0pkcnlONlNJS2x4dlZ5NDFtYVdJYWtkM2U3MnNvcGpsNDNsRnUzMmFjajNINCtXZUNVRWhoU2VsRDRZRDBFWkRBPT0K",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.11.0/YesPlayMusic_0.11.0_x64-setup.exe"
     },
     "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0x6VVlWSW9YMnlaSjZ5U3pmNS9ZMHFOTWFzNysrNjFMMUhWWmxoZE1mWGUyZW1jVVg2OGVod1JSNXlkYU5teDhZV3FiRmhTUTJMajcvMWUxYTFFVXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MjIyODkzCWZpbGU6WWVzUGxheU11c2ljXzAuOS4zX2FtZDY0LkFwcEltYWdlCmNlRDFURWhCNk5VS2c3anllSzBlQmFzUVQ1OE5nYlVjL3NmWTFDSldadUpub0M0cnNWemhTd08vRG56VEpWSDVFUEpDbm5Kcis1S3E3UmJoaS9EbEJBPT0K",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.3/YesPlayMusic_0.9.3_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0ZwK25ibGI0Tnl2ZDJua1NmSi9Rc0NEWVFtQWowNWhHNGVhMFAwUWRwS21iYzJXMjI1aDJUMmRpeC9ZZjdOcjFzUDFkUkhZWXozSE1BNzl2MWtzVkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkwMTg2CWZpbGU6WWVzUGxheU11c2ljXzAuMTEuMF9hbWQ2NC5BcHBJbWFnZQpEZW5RZkpOZDB4TGxlbnVxbUxpbVVqbjdkSUlwNmpib0ZoNlI0V2xYT0N4c0dvZEdIMXJubFNsUzExTTZ2Z3VPc1VqTVdhbW1oNFBmMFAzVWZLZm9BZz09Cg==",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.11.0/YesPlayMusic_0.11.0_amd64.AppImage"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0JURFpFT0dUVnVLVjdXL2U5S0JOUmRFSGQzM1QwOGMydVUzY1E0QnpEVDFyTGcxS1liM25hRGVEWnhmbmtxRkExcEo0M25XRVlBQVlUTURRZUNsSXdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MjIyODkzCWZpbGU6WWVzUGxheU11c2ljXzAuOS4zX2FtZDY0LmRlYgpkS2RwY0lpY21KMWt4b3ZHc1Fydm1sSlZobndXU2w0UWVNYVg3NFlLbE05YTRqQm1xUlAxOG13RUdxNjZ2YStaNzQ0aFRjbk9pWTlsZjB5UElHTlRCUT09Cg==",
-      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.9.3/YesPlayMusic_0.9.3_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEVjc21FMUo3N0o2SkR5cXhtd3RySnFTYm9zUXpBYjFuT25XeUdhdU9tbFlIU1hPK0ZFZW1zOTRxdkhHK0FBdGM4b2t6N1BRb2dtMm11bkUrZ1k0SC8rbVMxU2tScGc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkwMTg2CWZpbGU6WWVzUGxheU11c2ljXzAuMTEuMF9hbWQ2NC5kZWIKMnpvMkJlT2hLUndaVTN3dlFJWjlXeXdGR21FN1Nhc3pjbTBBNVhtYUF4eTA5d3AyV0xRN2l0VGVVUS9YTU5CVWtBRWhJNHh5QWxIK21BK0lRd25OQ2c9PQo=",
+      "url": "https://github.com/nagi-studio/YesPlayMusic/releases/download/v0.11.0/YesPlayMusic_0.11.0_amd64.deb"
     }
   }
 }
