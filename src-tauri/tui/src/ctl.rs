@@ -4,6 +4,7 @@
 //! job: commands go to its control socket (src-tauri/src/main.rs), status
 //! comes from the sidecar's legacy player endpoint.
 
+use std::io::{self, Write};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -11,7 +12,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::remote::{self, Command, Snapshot};
+use crate::remote::{self, Command, Snapshot, SpectrumFrame, SPECTRUM_PROTOCOL_VERSION};
 
 const GUI_SOCKET: &str = "/tmp/com_electron_yesplaymusic_ctl.sock";
 const GUI_PLAYER_URL: &str = "http://127.0.0.1:27232/player";
@@ -33,6 +34,12 @@ impl Target {
 }
 
 pub async fn run(command: Command, forced: Option<Target>, json: bool) -> Result<()> {
+    if matches!(command, Command::Spectrum { .. }) {
+        if forced != Some(Target::Tui) || !json {
+            bail!("频谱流需要同时指定 --json 和 --tui");
+        }
+        return stream_tui_spectrum(command).await;
+    }
     let gui = probe(status_gui()).await;
     let tui = probe(status_tui()).await;
     let target = resolve(forced, &gui, &tui)?;
@@ -72,11 +79,58 @@ pub async fn run(command: Command, forced: Option<Target>, json: bool) -> Result
             Command::Next => "已切到下一首".to_owned(),
             Command::Prev => "已切到上一首".to_owned(),
             Command::Seek { position_ms } => format!("已跳转到 {}", clock(position_ms)),
-            Command::Status => unreachable!(),
+            Command::Status | Command::Spectrum { .. } => unreachable!(),
         };
         println!("{done}（{}）", target.label());
     }
     Ok(())
+}
+
+async fn stream_tui_spectrum(command: Command) -> Result<()> {
+    let stream = UnixStream::connect(remote::socket_path())
+        .await
+        .context("TUI 播放器没有在运行")?;
+    let (reader, mut writer) = stream.into_split();
+    let mut payload = serde_json::to_string(&command)?;
+    payload.push('\n');
+    writer.write_all(payload.as_bytes()).await?;
+
+    let mut lines = BufReader::new(reader).lines();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    let mut received_frame = false;
+    while let Some(line) = lines.next_line().await? {
+        let frame = parse_spectrum_line(&line)?;
+        let mut encoded = serde_json::to_vec(&frame)?;
+        encoded.push(b'\n');
+        if let Err(error) = stdout.write_all(&encoded) {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
+            return Err(error).context("无法写出频谱流");
+        }
+        received_frame = true;
+    }
+    if !received_frame {
+        bail!("TUI 频谱流在首帧前结束");
+    }
+    Ok(())
+}
+
+fn parse_spectrum_line(line: &str) -> Result<SpectrumFrame> {
+    let frame = serde_json::from_str::<SpectrumFrame>(line).map_err(|_| {
+        let detail = serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|value| value.get("error")?.as_str().map(str::to_owned));
+        anyhow::anyhow!(
+            "TUI 频谱流不可用{}",
+            detail.map_or_else(String::new, |detail| format!(": {detail}")),
+        )
+    })?;
+    if frame.version != SPECTRUM_PROTOCOL_VERSION {
+        bail!("TUI 频谱协议版本不兼容: {}", frame.version);
+    }
+    Ok(frame)
 }
 
 fn ensure_command_supported(command: Command, target: Target, snapshot: &Snapshot) -> Result<()> {
@@ -246,6 +300,16 @@ mod tests {
         snapshot.seekable = true;
         assert!(ensure_command_supported(seek, Target::Gui, &snapshot).is_ok());
         assert!(ensure_command_supported(seek, Target::Tui, &snapshot).is_ok());
+    }
+
+    #[test]
+    fn old_tui_spectrum_errors_are_not_reported_as_frames() {
+        let error = parse_spectrum_line(r#"{"ok":false,"error":"unknown variant `spectrum`"}"#)
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown variant `spectrum`"));
+        assert!(
+            parse_spectrum_line(&serde_json::to_string(&SpectrumFrame::default()).unwrap()).is_ok()
+        );
     }
 
     #[test]

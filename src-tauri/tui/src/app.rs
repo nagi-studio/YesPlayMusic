@@ -2896,18 +2896,32 @@ async fn event_loop(
     let (remote_publish, remote_snapshots) =
         tokio::sync::watch::channel(remote::Snapshot::default());
     #[cfg(unix)]
+    let (spectrum_publish, _) = tokio::sync::broadcast::channel(4);
+    #[cfg(unix)]
+    let spectrum_subscribers = remote::SpectrumSubscribers::default();
+    #[cfg(unix)]
     match remote::bind(&remote::socket_path()) {
         Ok(Some(listener)) => {
             tokio::spawn(remote::serve(
                 listener,
                 fx.actions.clone(),
                 remote_snapshots,
+                spectrum_publish.clone(),
+                spectrum_subscribers.clone(),
             ));
         }
         // Another live TUI owns the socket; it keeps remote control.
         Ok(None) => {}
         Err(error) => tracing::warn!(%error, "control socket unavailable"),
     }
+    #[cfg(unix)]
+    let spectrum_stream_active = || spectrum_subscribers.is_active();
+    #[cfg(not(unix))]
+    let spectrum_stream_active = || false;
+    #[cfg(unix)]
+    let spectrum_subscription_changed = || spectrum_subscribers.changed();
+    #[cfg(not(unix))]
+    let spectrum_subscription_changed = || std::future::pending::<()>();
     let mut state = AppState::new(config);
     state.set_terminal_background(terminal_background);
     state.terminal_is_light = terminal_is_light;
@@ -2996,7 +3010,10 @@ async fn event_loop(
             _ = ui_tick.tick(), if state.needs_ui_tick() => {
                 state.update(Action::UiTick, &fx);
             }
-            _ = spectrum_ticks.tick(), if state.config.spectrum_enabled || state.view == View::Settings => {
+            _ = spectrum_subscription_changed() => {}
+            _ = spectrum_ticks.tick(), if state.config.spectrum_enabled
+                || state.view == View::Settings
+                || spectrum_stream_active() => {
                 let (attack, decay) = state.config.spectrum_sensitivity.coefficients();
                 state.spectrum.set_sensitivity(
                     attack,
@@ -3011,6 +3028,17 @@ async fn event_loop(
                     state.config.spectrum_stereo,
                     state.config.spectrum_db,
                 );
+                #[cfg(unix)]
+                {
+                    if spectrum_stream_active() {
+                        let _ = spectrum_publish.send(remote::SpectrumFrame {
+                            version: remote::SPECTRUM_PROTOCOL_VERSION,
+                            style: state.config.spectrum_style,
+                            playing: state.now.is_some() && !state.paused,
+                            bins: state.spectrum.remote_bins(),
+                        });
+                    }
+                }
             }
             _ = graphics_geometry_ticks.tick(), if graphics_geometry.is_some() => {
                 let font_size = graphics_geometry

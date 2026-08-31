@@ -54,6 +54,11 @@ struct Args {
 enum Ctl {
     /// Show the current track.
     Status,
+    /// Stream normalized spectrum frames as NDJSON from a running TUI.
+    Spectrum {
+        #[arg(long, default_value_t = 12, value_parser = parse_spectrum_fps)]
+        fps: u8,
+    },
     /// Pause playback.
     Pause,
     /// Resume playback.
@@ -78,6 +83,7 @@ impl From<Ctl> for remote::Command {
     fn from(command: Ctl) -> Self {
         match command {
             Ctl::Status => Self::Status,
+            Ctl::Spectrum { fps } => Self::Spectrum { fps },
             Ctl::Pause => Self::Pause,
             Ctl::Resume => Self::Resume,
             Ctl::Toggle => Self::Toggle,
@@ -100,6 +106,16 @@ fn parse_seek_seconds(value: &str) -> Result<f64, String> {
         return Err("seek position must be a finite non-negative number of seconds".to_owned());
     }
     Ok(seconds)
+}
+
+fn parse_spectrum_fps(value: &str) -> Result<u8, String> {
+    let fps = value
+        .parse::<u8>()
+        .map_err(|_| "spectrum fps must be an integer between 1 and 20".to_owned())?;
+    if !(1..=spectrum::REMOTE_SPECTRUM_MAX_FPS).contains(&fps) {
+        return Err("spectrum fps must be between 1 and 20".to_owned());
+    }
+    Ok(fps)
 }
 
 fn main() -> Result<()> {
@@ -188,6 +204,27 @@ mod cli_tests {
         assert_eq!(
             remote::Command::from(Ctl::Seek { seconds: 1.25 }),
             remote::Command::Seek { position_ms: 1250 }
+        );
+    }
+
+    #[test]
+    fn spectrum_stream_has_a_bounded_default() {
+        let args = Args::try_parse_from(["ypm", "--json", "--tui", "spectrum"]).unwrap();
+        assert!(matches!(args.command, Some(Ctl::Spectrum { fps: 12 })));
+        for fps in ["0", "21", "fast"] {
+            assert!(
+                Args::try_parse_from(["ypm", "--json", "--tui", "spectrum", "--fps", fps]).is_err(),
+                "{fps}",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spectrum_rate_reaches_the_wire_protocol() {
+        assert_eq!(
+            remote::Command::from(Ctl::Spectrum { fps: 8 }),
+            remote::Command::Spectrum { fps: 8 },
         );
     }
 }
