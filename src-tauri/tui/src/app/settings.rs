@@ -131,6 +131,7 @@ fn spawn_cache_usage_probe(
 
 pub(crate) struct SettingsState {
     pub(crate) selected: usize,
+    pub(crate) feedback: Option<String>,
     original: Option<Config>,
     original_theme: Option<Theme>,
     return_view: View,
@@ -150,6 +151,7 @@ impl Default for SettingsState {
     fn default() -> Self {
         Self {
             selected: 0,
+            feedback: None,
             original: None,
             original_theme: None,
             return_view: View::NowPlaying,
@@ -189,6 +191,7 @@ impl AppState {
         self.settings.original_theme = Some(self.theme);
         self.settings.return_view = self.view;
         self.settings.selected = 0;
+        self.settings.feedback = None;
         self.view = View::Settings;
         self.zen = false;
         self.status = None;
@@ -248,7 +251,7 @@ impl AppState {
         if self.view != View::Settings {
             return;
         }
-        self.status = None;
+        self.settings.feedback = None;
         let before = self.config.clone();
         match SettingField::ALL[self.settings.selected] {
             SettingField::Theme => {
@@ -383,7 +386,7 @@ impl AppState {
                 self.start_intro_preview();
                 // A silent no-op reads as a broken setting; say why.
                 if self.config.intro_animation != IntroStyle::Off && self.intro_preview.is_none() {
-                    self.status = Some(i18n::t(Key::IntroPreviewTooSmall).to_owned());
+                    self.settings.feedback = Some(i18n::t(Key::IntroPreviewTooSmall).to_owned());
                 }
             }
             SettingField::QueueBehavior => {
@@ -409,7 +412,8 @@ impl AppState {
                 self.status = Some(i18n::t(Key::SettingsSaved).to_owned());
             }
             Err(error) => {
-                self.status = Some(format!("{}: {error}", i18n::t(Key::SettingsSaveFailed)));
+                self.settings.feedback =
+                    Some(format!("{}: {error}", i18n::t(Key::SettingsSaveFailed)));
             }
         }
     }
@@ -425,6 +429,7 @@ impl AppState {
             self.apply_config_preview(fx, &before, original_theme);
         }
         self.view = self.settings.return_view;
+        self.settings.feedback = None;
         self.status = None;
     }
 

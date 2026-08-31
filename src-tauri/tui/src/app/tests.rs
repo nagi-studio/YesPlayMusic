@@ -1900,7 +1900,10 @@ async fn a_settings_save_failure_keeps_the_editor_and_preview_open() {
 
     assert_eq!(state.view, View::Settings);
     assert_eq!(state.config.theme, "pico8");
-    assert!(state.status.is_some());
+    assert!(state.settings.feedback.as_deref().is_some_and(
+        |message| message.starts_with(crate::i18n::t(crate::i18n::Key::SettingsSaveFailed))
+    ));
+    assert!(state.status.is_none());
     assert!(directory.path().is_dir());
 }
 

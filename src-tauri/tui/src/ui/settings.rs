@@ -209,7 +209,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, area: Rect, hits: &mut Hits
         );
     }
 
-    if let Some(status) = &state.status {
+    if let Some(status) = &state.settings.feedback {
         let color = if status.starts_with(i18n::t(Key::SettingsSaveFailed)) {
             theme.accent2
         } else {
@@ -414,7 +414,7 @@ mod tests {
             let backend = TestBackend::new(80, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             let mut state = AppState::new(&Config::default());
-            state.status = Some(status);
+            state.settings.feedback = Some(status);
             let mut hits = Hits::default();
             terminal
                 .draw(|frame| draw(frame, &mut state, frame.area(), &mut hits))
@@ -429,6 +429,35 @@ mod tests {
                 .unwrap();
             assert_eq!(cell.fg, expected);
         }
+    }
+
+    #[test]
+    fn global_playback_status_does_not_leak_into_settings_feedback() {
+        const GLOBAL_PLAYBACK_STATUS: &str = "GLOBAL_PLAYBACK_STATUS";
+        const SETTINGS_FEEDBACK: &str = "SETTINGS_FEEDBACK";
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new(&Config::default());
+        state.status = Some(GLOBAL_PLAYBACK_STATUS.to_owned());
+        state.settings.feedback = Some(SETTINGS_FEEDBACK.to_owned());
+        let mut hits = Hits::default();
+        terminal
+            .draw(|frame| draw(frame, &mut state, frame.area(), &mut hits))
+            .unwrap();
+
+        let rendered_text = |terminal: &Terminal<TestBackend>| {
+            (0..terminal.backend().buffer().area.height)
+                .map(|y| {
+                    (0..terminal.backend().buffer().area.width)
+                        .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains(SETTINGS_FEEDBACK));
+        assert!(!rendered.contains(GLOBAL_PLAYBACK_STATUS));
     }
 
     #[test]
